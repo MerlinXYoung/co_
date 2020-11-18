@@ -37,13 +37,14 @@ enum LogLevel {
 
 class LevelLogSaver {
   public:
-    LevelLogSaver(const char* file, unsigned line, int level) : _level(level) {
+    LevelLogSaver(const char* file, unsigned line, const char* func, int level) : _level(level) {
         if (xxLog == 0) xxLog = new fastream(128);
         xxLog->clear();
 
         (*xxLog) << "DIWEF"[level];
         xxLog->resize(14); // make room for time: 1108 18:16:08
-        (*xxLog) << ' ' << current_thread_id() << ' ' << file << ':' << line << ']' << ' ';
+        (*xxLog) << ' ' << current_thread_id() << ' ' << file << ':' 
+            << line << '(' << func << ")]" << ' ';
     }
 
     ~LevelLogSaver() {
@@ -61,10 +62,11 @@ class LevelLogSaver {
 
 class FatalLogSaver {
   public:
-    FatalLogSaver(const char* file, unsigned int line) {
+    FatalLogSaver(const char* file, unsigned int line, const char* func) {
         if (xxLog == 0) xxLog = new fastream(128);
         xxLog->clear();
-        (*xxLog) << ' ' << current_thread_id() << ' ' << file << ':' << line << ']' << ' ';
+        (*xxLog) << ' ' << current_thread_id() << ' ' << file << ':' 
+            << line << '(' << func << ")]" << ' ';
     }
 
     ~FatalLogSaver() {
@@ -81,8 +83,9 @@ class CLogSaver {
   public:
     CLogSaver() = default;
 
-    CLogSaver(const char* file, unsigned int line) {
-        _fs << file << ':' << line << ']' << ' ';
+    CLogSaver(const char* file, unsigned int line, const char* func) {
+        // _fs << file << ':' << line << ']' << ' ';
+        _fs << file << ':' << line << '(' << func << ")]" << ' ';
     }
 
     ~CLogSaver() {
@@ -105,7 +108,7 @@ class CLogSaver {
 using namespace ___;
 
 #define COUT   log::xx::CLogSaver().fs()
-#define CLOG   log::xx::CLogSaver(__FILE__, __LINE__).fs()
+#define CLOG   log::xx::CLogSaver(__FILE__, __LINE__, __FUNCTION__).fs()
 
 // DLOG  ->  DEBUG
 // LOG   ->  INFO
@@ -117,11 +120,11 @@ using namespace ___;
 // LOG << "hello world " << 23;
 // WLOG_IF(1 + 1 == 2) << "xx";
 #define DLOG  if (FLG_min_log_level <= log::xx::debug) \
-              log::xx::LevelLogSaver(__FILE__, __LINE__, log::xx::debug).fs()
-#define LOG   log::xx::LevelLogSaver(__FILE__, __LINE__, log::xx::info).fs()
-#define WLOG  log::xx::LevelLogSaver(__FILE__, __LINE__, log::xx::warning).fs()
-#define ELOG  log::xx::LevelLogSaver(__FILE__, __LINE__, log::xx::error).fs()
-#define _FLOG log::xx::FatalLogSaver(__FILE__, __LINE__).fs()
+              log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::debug).fs()
+#define LOG   log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::info).fs()
+#define WLOG  log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::warning).fs()
+#define ELOG  log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::error).fs()
+#define _FLOG log::xx::FatalLogSaver(__FILE__, __LINE__, __FUNCTION__).fs()
 #define FLOG  _FLOG << "fatal error! "
 
 #define DLOG_IF(cond) if (cond) DLOG
