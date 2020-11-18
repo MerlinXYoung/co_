@@ -6,116 +6,147 @@
 #include "co/co.h"
 #include "co/atomic.h"
 
+#include "co/flag.h"
+
 #include <dlfcn.h>
 #include <vector>
 #include <unordered_map>
+#include <mutex>
+#include <cstdarg>
+
+DEF_uint32(min_fd_size, 1024*10 , "#0 min size of file descriptor, default: 1024*10");
 
 namespace co {
 
 class HookInfo {
   public:
-    HookInfo() : HookInfo(0) {}
-    explicit HookInfo(int64 v) : _v(v) {}
+    HookInfo() = default;
     ~HookInfo() = default;
 
-    HookInfo(const HookInfo& h) {
-        _v = h._v;
+    DISALLOW_COPY_AND_ASSIGN(HookInfo);
+
+    // HookInfo(const HookInfo& h) {
+    //     _v = h._v;
+    // }
+
+    inline bool hookable() const {
+        return !(_user_flags & O_NONBLOCK);
     }
 
-    bool hookable() const {
-        return _v != 0;
+    inline int send_timeout() const {
+        return _send_timeout;
     }
 
-    int send_timeout() const {
-        return _p.send_timeout;
+    inline int recv_timeout() const {
+        return _recv_timeout;
     }
 
-    int recv_timeout() const {
-        return _p.recv_timeout;
+    inline void set_send_timeout(int ms) {
+        _send_timeout = ms;
     }
 
-    void set_send_timeout(int ms) {
-        _p.send_timeout = ms;
+    inline void set_recv_timeout(int ms) {
+        _recv_timeout = ms;
     }
 
-    void set_recv_timeout(int ms) {
-        _p.recv_timeout = ms;
+    inline void set_recv_timeout(struct timeval& tv){
+        _recv_timeout = tv.tv_sec*1000 + tv.tv_usec / 1000;
     }
 
+    inline void set_send_timeout(struct timeval& tv){
+        _send_timeout = tv.tv_sec*1000 + tv.tv_usec / 1000;
+    }
+
+    inline int user_flags()const{ return _user_flags;}
+    inline void set_user_flags(int flags){ _user_flags = flags;}
   private:
-    union {
-        struct {
-            int32 send_timeout;
-            int32 recv_timeout;
-        } _p;
 
-        int64 _v;
-    };
+    int32 _send_timeout{0};
+    int32 _recv_timeout{0};
+
+    int32 _user_flags{0};
 };
 
 class Hook {
+    HookInfo** _infos{nullptr};
+    int _size{0};
+    using lock_type = std::mutex;
+    using lock_guard_type = std::unique_lock<lock_type>;
+    lock_type _lock;
   public:
-    Hook() : _hk(co::max_sched_num()) {}
+    // Hook() : _hk(co::max_sched_num()) {}
+    Hook(){
+        _infos = (HookInfo**) malloc(sizeof(HookInfo*) * FLG_min_fd_size);
+        assert(_infos);
+        _size = FLG_min_fd_size;
+    }
     ~Hook() = default;
 
-    void erase(int fd) {
-        _hk[gSched->id()].erase(fd);
-    }
-
-    HookInfo on_close(int fd) {
-        auto& hk = _hk[gSched->id()];
-        auto it = hk.find(fd);
-        if (it == hk.end()) return HookInfo();
-
-        HookInfo hi = it->second;
-        hk.erase(it);
-        return hi;
-    }
-
-    HookInfo on_shutdown(int fd, char c) {
-        auto& hk = _hk[gSched->id()];
-        auto it = hk.find(fd);
-        if (it == hk.end()) return HookInfo();
-
-        HookInfo res = it->second;
-        HookInfo& hi = it->second;
-        if (c == 'r') {
-            hi.set_recv_timeout(0);
-            if (!hi.hookable()) hk.erase(it);
-        } else if (c == 'w') {
-            hi.set_send_timeout(0);
-            if (!hi.hookable()) hk.erase(it);
-        } else {
-            hk.erase(it);
+    inline HookInfo* alloc_by_fd(int fd){
+        if(_size <= fd){
+            lock_guard_type g(_lock);
+            if(_size <= fd){
+                auto size = _size*3>>1;
+                _infos = (HookInfo**) realloc(_infos, sizeof(HookInfo*) * size);
+                assert(!_infos);
+                _size = size;
+            }
         }
-
-        return res;
+        return _infos[fd] = (HookInfo*) malloc(sizeof(HookInfo));
     }
 
-    HookInfo get_hook_info(int fd) {
-        auto& hk = _hk[gSched->id()];
-        auto it = hk.find(fd);
-        if (it != hk.end()) return it->second;
+    inline void free_by_fd(int fd){
+        assert(fd >= 0 && fd < _size);
+        free(_infos[fd]);
+        _infos[fd] = nullptr;
+    }
 
-        // check whether @fd is non-block, as we don't need to hook non-block socket
-        int flag = fcntl(fd, F_GETFL);
-        if (flag & O_NONBLOCK) return hk[fd] = HookInfo();
+    inline HookInfo* get_by_fd(int fd){
+        assert(fd >= 0 && fd < _size);
+        return _infos[fd];
+    }
 
+    inline HookInfo* new_by_fd(int fd){
+        auto p = alloc_by_fd(fd);
+        assert(p);
         // check whether recv/send timeout is set for @fd
         int recv_timeout = this->_Get_timeout(fd, 'r');
         int send_timeout = this->_Get_timeout(fd, 'w');
-        if (recv_timeout == 0 || send_timeout == 0) return hk[fd] = HookInfo();
+       
+       p->set_recv_timeout(recv_timeout?recv_timeout:1);
+       p->set_send_timeout(send_timeout?send_timeout:1);
+       return p;
 
-        HookInfo hi;
-        hi.set_recv_timeout(recv_timeout);
-        hi.set_send_timeout(send_timeout);
-
-        fcntl(fd, F_SETFL, flag | O_NONBLOCK);
-        return hk[fd] = hi;
     }
 
+
+    HookInfo* on_shutdown(int fd, char c) {
+        auto phi = get_by_fd(fd);
+        assert(phi);
+
+        if (c == 'r') {
+            phi->set_recv_timeout(0);
+            if (phi->send_timeout()==0) {
+                free_by_fd(fd);
+                return nullptr;
+            }
+        } else if (c == 'w') {
+            phi->set_send_timeout(0);
+            if (phi->recv_timeout()==0) {
+                free_by_fd(fd);
+                return nullptr;
+            }
+        } else {
+            free_by_fd(fd);
+            return nullptr;
+        }
+
+        return phi;
+    }
+
+
+
   private:
-    std::vector<std::unordered_map<int, HookInfo>> _hk;
 
     // return 0 if @fd is not valid, or it does not refer to a socket.
     // return -1 if timeout is not set for @fd, otherwise return a positive value.
@@ -163,6 +194,7 @@ inline co::Mutex& gDnsMutex() {
 
 
 extern "C" {
+socket_fp_t fp_socket = 0;
 
 connect_fp_t fp_connect = 0;
 accept_fp_t fp_accept = 0;
@@ -191,6 +223,9 @@ nanosleep_fp_t fp_nanosleep = 0;
 gethostbyname_fp_t fp_gethostbyname = 0;
 gethostbyaddr_fp_t fp_gethostbyaddr = 0;
 
+setsockopt_fp_t fp_setsockopt = 0;
+fcntl_fp_t fp_fcntl = 0;
+
 #ifdef __linux__
 epoll_wait_fp_t fp_epoll_wait = 0;
 accept4_fp_t fp_accept4 = 0;
@@ -218,6 +253,128 @@ kevent_fp_t fp_kevent = 0;
     } while (true)
 
 
+
+int fcntl(int fildes, int cmd, ...)
+{
+	init_hook( fcntl );
+
+	if( fildes < 0 )
+	{
+		return __LINE__;
+	}
+
+	va_list arg_list;
+	va_start( arg_list,cmd );
+
+	int ret = -1;
+	auto lp = gHook().get_by_fd( fildes );
+	switch( cmd )
+	{
+		case F_DUPFD:
+		{
+			int param = va_arg(arg_list,int);
+			ret = fp_fcntl( fildes,cmd,param );
+			break;
+		}
+		case F_GETFD:
+		{
+			ret = fp_fcntl( fildes,cmd );
+			break;
+		}
+		case F_SETFD:
+		{
+			int param = va_arg(arg_list,int);
+			ret = fp_fcntl( fildes,cmd,param );
+			break;
+		}
+		case F_GETFL:
+		{
+			ret = fp_fcntl( fildes,cmd );
+			if (lp && !(lp->user_flags() & O_NONBLOCK)) {
+				ret = ret & (~O_NONBLOCK);
+			}
+			break;
+		}
+		case F_SETFL:
+		{
+			int param = va_arg(arg_list,int);
+			int flag = param;
+			if( /*co_is_enable_sys_hook() &&*/ lp )
+			{
+				flag |= O_NONBLOCK;
+			}
+			ret = fp_fcntl( fildes,cmd,flag );
+			if( 0 == ret && lp )
+			{
+				lp->set_user_flags (param);
+			}
+			break;
+		}
+		case F_GETOWN:
+		{
+			ret = fp_fcntl( fildes,cmd );
+			break;
+		}
+		case F_SETOWN:
+		{
+			int param = va_arg(arg_list,int);
+			ret = fp_fcntl( fildes,cmd,param );
+			break;
+		}
+		case F_GETLK:
+		{
+			struct flock *param = va_arg(arg_list,struct flock *);
+			ret = fp_fcntl( fildes,cmd,param );
+			break;
+		}
+		case F_SETLK:
+		{
+			struct flock *param = va_arg(arg_list,struct flock *);
+			ret = fp_fcntl( fildes,cmd,param );
+			break;
+		}
+		case F_SETLKW:
+		{
+			struct flock *param = va_arg(arg_list,struct flock *);
+			ret = fp_fcntl( fildes,cmd,param );
+			break;
+		}
+	}
+
+	va_end( arg_list );
+
+	return ret;
+}
+
+int setsockopt(int fd, int level, int option_name,
+			                 const void *option_value, socklen_t option_len)
+{
+	init_hook( setsockopt );
+
+	// if( !co_is_enable_sys_hook() )
+	// {
+	// 	return g_sys_setsockopt_func( fd,level,option_name,option_value,option_len );
+	// }
+	auto lp = gHook().get_by_fd( fd );
+
+	if( lp && SOL_SOCKET == level )
+	{
+		struct timeval *val = (struct timeval*)option_value;
+		if( SO_RCVTIMEO == option_name  ) 
+		{
+            lp->set_recv_timeout(*val);
+			// memcpy( &lp->read_timeout,val,sizeof(*val) );
+		}
+		else if( SO_SNDTIMEO == option_name )
+		{
+            lp->set_send_timeout(*val);
+			// memcpy( &lp->write_timeout,val,sizeof(*val) );
+		}
+	}
+	return fp_setsockopt( fd,level,option_name,option_value,option_len );
+}
+
+
 /*
  * From man-pages socket(7):  (man 7 socket)
  * SO_RCVTIMEO and SO_SNDTIMEO
@@ -229,18 +386,41 @@ kevent_fp_t fp_kevent = 0;
  *     with errno set to EAGAIN or EWOULDBLOCK, or EINPROGRESS (for connect(2))
  *     just as if the socket was specified to be nonblocking.
  */
+
+int socket(int domain, int type, int protocol)
+{
+    init_hook(socket);
+    if (!gSched) return fp_socket(domain,type,protocol);
+
+    if( type & SOCK_NONBLOCK )
+        return fp_socket(domain,type,protocol);
+
+    int fd = fp_socket(domain,type,protocol);
+	if( fd < 0 )
+	{
+		return fd;
+	}
+
+	auto lp = gHook().new_by_fd( fd );
+	
+	fcntl( fd, F_SETFL, fp_fcntl(fd, F_GETFL,0 ) );
+
+	return fd;
+
+}
+
 int connect(int fd, const struct sockaddr* addr, socklen_t addrlen) {
     init_hook(connect);
     if (!gSched) return fp_connect(fd, addr, addrlen);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_connect(fd, addr, addrlen);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_connect(fd, addr, addrlen);
 
     int r;
-    r = co::connect(fd, addr, addrlen, hi.send_timeout());
+    r = co::connect(fd, addr, addrlen, p->send_timeout());
     if (r == -1 && errno == ETIMEDOUT) errno = EINPROGRESS; // set errno to EINPROGRESS
 
-    gHook().erase(fd);
+    gHook().free_by_fd(fd);
     return r;
 }
 
@@ -248,8 +428,8 @@ int accept(int fd, struct sockaddr* addr, socklen_t* addrlen) {
     init_hook(accept);
     if (!gSched) return fp_accept(fd, addr, addrlen);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_accept(fd, addr, addrlen);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_accept(fd, addr, addrlen);
 
     IoEvent ev(fd, EV_read);
     do {
@@ -269,8 +449,9 @@ int shutdown(int fd, int how) {
     if (!gSched) return fp_shutdown(fd, how);
 
     char c = (how == SHUT_RD ? 'r' : (how == SHUT_WR ? 'w' : 'b'));
-    auto hi = gHook().on_shutdown(fd, c);
-    if (!hi.hookable()) return fp_shutdown(fd, how);
+    auto p = gHook().on_shutdown(fd, c);
+    // if (!p->hookable()) return fp_shutdown(fd, how);
+    if(p) return fp_shutdown(fd, how);
     return co::shutdown(fd, c);
 }
 
@@ -278,123 +459,123 @@ int close(int fd) {
     init_hook(close);
     if (!gSched) return fp_close(fd);
 
-    auto hi = gHook().on_close(fd);
-    if (!hi.hookable()) return fp_close(fd);
+    gHook().free_by_fd(fd);
+    // if (!p->hookable()) return fp_close(fd);
     return co::close(fd);
 }
 
-int __close(int fd) {
-    return close(fd);
-}
+// int __close(int fd) {
+//     return close(fd);
+// }
 
 ssize_t read(int fd, void* buf, size_t count) {
     init_hook(read);
     if (!gSched) return fp_read(fd, buf, count);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_read(fd, buf, count);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_read(fd, buf, count);
 
     IoEvent ev(fd, EV_read);
-    do_hook(fp_read(fd, buf, count), ev, hi.recv_timeout());
+    do_hook(fp_read(fd, buf, count), ev, p->recv_timeout());
 }
 
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
     init_hook(readv);
     if (!gSched) return fp_readv(fd, iov, iovcnt);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_readv(fd, iov, iovcnt);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_readv(fd, iov, iovcnt);
 
     IoEvent ev(fd, EV_read);
-    do_hook(fp_readv(fd, iov, iovcnt), ev, hi.recv_timeout());
+    do_hook(fp_readv(fd, iov, iovcnt), ev, p->recv_timeout());
 }
 
 ssize_t recv(int fd, void* buf, size_t len, int flags) {
     init_hook(recv);
     if (!gSched) return fp_recv(fd, buf, len, flags);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_recv(fd, buf, len, flags);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_recv(fd, buf, len, flags);
 
     IoEvent ev(fd, EV_read);
-    do_hook(fp_recv(fd, buf, len, flags), ev, hi.recv_timeout());
+    do_hook(fp_recv(fd, buf, len, flags), ev, p->recv_timeout());
 }
 
 ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr, socklen_t* addrlen) {
     init_hook(recvfrom);
     if (!gSched) return fp_recvfrom(fd, buf, len, flags, addr, addrlen);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_recvfrom(fd, buf, len, flags, addr, addrlen);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_recvfrom(fd, buf, len, flags, addr, addrlen);
 
     IoEvent ev(fd, EV_read);
-    do_hook(fp_recvfrom(fd, buf, len, flags, addr, addrlen), ev, hi.recv_timeout());
+    do_hook(fp_recvfrom(fd, buf, len, flags, addr, addrlen), ev, p->recv_timeout());
 }
 
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
     init_hook(recvmsg);
     if (!gSched) return fp_recvmsg(fd, msg, flags);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_recvmsg(fd, msg, flags);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_recvmsg(fd, msg, flags);
 
     IoEvent ev(fd, EV_read);
-    do_hook(fp_recvmsg(fd, msg, flags), ev, hi.recv_timeout());
+    do_hook(fp_recvmsg(fd, msg, flags), ev, p->recv_timeout());
 }
 
 ssize_t write(int fd, const void* buf, size_t count) {
     init_hook(write);
     if (!gSched) return fp_write(fd, buf, count);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_write(fd, buf, count);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_write(fd, buf, count);
 
     IoEvent ev(fd, EV_write);
-    do_hook(fp_write(fd, buf, count), ev, hi.send_timeout());
+    do_hook(fp_write(fd, buf, count), ev, p->send_timeout());
 }
 
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
     init_hook(writev);
     if (!gSched) return fp_writev(fd, iov, iovcnt);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_writev(fd, iov, iovcnt);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_writev(fd, iov, iovcnt);
 
     IoEvent ev(fd, EV_write);
-    do_hook(fp_writev(fd, iov, iovcnt), ev, hi.send_timeout());
+    do_hook(fp_writev(fd, iov, iovcnt), ev, p->send_timeout());
 }
 
 ssize_t send(int fd, const void* buf, size_t len, int flags) {
     init_hook(send);
     if (!gSched) return fp_send(fd, buf, len, flags);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_send(fd, buf, len, flags);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_send(fd, buf, len, flags);
 
     IoEvent ev(fd, EV_write);
-    do_hook(fp_send(fd, buf, len, flags), ev, hi.send_timeout());
+    do_hook(fp_send(fd, buf, len, flags), ev, p->send_timeout());
 }
 
 ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sockaddr* addr, socklen_t addrlen) {
     init_hook(sendto);
     if (!gSched) return fp_sendto(fd, buf, len, flags, addr, addrlen);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_sendto(fd, buf, len, flags, addr, addrlen);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_sendto(fd, buf, len, flags, addr, addrlen);
 
     IoEvent ev(fd, EV_write);
-    do_hook(fp_sendto(fd, buf, len, flags, addr, addrlen), ev, hi.send_timeout());
+    do_hook(fp_sendto(fd, buf, len, flags, addr, addrlen), ev, p->send_timeout());
 }
 
 ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
     init_hook(sendmsg);
     if (!gSched) return fp_sendmsg(fd, msg, flags);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_sendmsg(fd, msg, flags);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_sendmsg(fd, msg, flags);
 
     IoEvent ev(fd, EV_write);
-    do_hook(fp_sendmsg(fd, msg, flags), ev, hi.send_timeout());
+    do_hook(fp_sendmsg(fd, msg, flags), ev, p->send_timeout());
 }
 
 int poll(struct pollfd* fds, nfds_t nfds, int ms) {
@@ -500,8 +681,8 @@ int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags) {
     init_hook(accept4);
     if (!gSched) return fp_accept4(fd, addr, addrlen, flags);
 
-    auto hi = gHook().get_hook_info(fd);
-    if (!hi.hookable()) return fp_accept4(fd, addr, addrlen, flags);
+    auto p = gHook().get_by_fd(fd);
+    if (!p->hookable()) return fp_accept4(fd, addr, addrlen, flags);
 
     IoEvent ev(fd, EV_read);
     do {
@@ -560,8 +741,8 @@ struct hostent* gethostbyname(const char* name) {
     int* err = (int*) fs.data();
 
     int r = -1;
-    while (r = gethostbyname_r(name, ent,
-        (char*)(fs.data() + 8), fs.capacity() - 8, &res, err) == ERANGE &&
+    while ((r = gethostbyname_r(name, ent,
+        (char*)(fs.data() + 8), fs.capacity() - 8, &res, err)) == ERANGE &&
         *err == NETDB_INTERNAL)
     {
         fs.reserve(fs.capacity() << 1);
@@ -687,6 +868,8 @@ bool init_hooks() {
     init_hook(sleep);
     init_hook(usleep);
     init_hook(nanosleep);
+    init_hook(setsockopt);
+    init_hook(fcntl);
     init_hook(gethostbyname);
     init_hook(gethostbyaddr);
 

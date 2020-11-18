@@ -17,6 +17,7 @@
 #endif
 
 extern "C" {
+typedef int (*socket_fp_t)(int domain, int type, int protocol);
 
 typedef int (*connect_fp_t)(int, const struct sockaddr*, socklen_t);
 typedef int (*accept_fp_t)(int, struct sockaddr*, socklen_t*);
@@ -42,6 +43,11 @@ typedef unsigned int (*sleep_fp_t)(unsigned int);
 typedef int (*usleep_fp_t)(useconds_t);
 typedef int (*nanosleep_fp_t)(const struct timespec*, struct timespec*);
 
+typedef int (*setsockopt_fp_t)(int socket, int level, int option_name,
+			                 const void *option_value, socklen_t option_len);
+
+typedef int (*fcntl_fp_t)(int fildes, int cmd, ...);
+
 typedef struct hostent* (*gethostbyname_fp_t)(const char*);
 typedef struct hostent* (*gethostbyaddr_fp_t)(const void*, socklen_t, int);
 
@@ -57,6 +63,8 @@ typedef int (*gethostbyaddr_r_fp_t)(const void*, socklen_t, int, struct hostent*
 #else
 typedef int (*kevent_fp_t)(int, const struct kevent*, int, struct kevent*, int, const struct timespec*);
 #endif
+
+extern socket_fp_t fp_socket;
 
 extern connect_fp_t fp_connect;
 extern accept_fp_t fp_accept;
@@ -81,6 +89,9 @@ extern select_fp_t fp_select;
 extern sleep_fp_t fp_sleep;
 extern usleep_fp_t fp_usleep;
 extern nanosleep_fp_t fp_nanosleep;
+
+extern setsockopt_fp_t fp_setsockopt;
+extern fcntl_fp_t fp_fcntl;
 
 extern gethostbyname_fp_t fp_gethostbyname;
 extern gethostbyaddr_fp_t fp_gethostbyaddr;
