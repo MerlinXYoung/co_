@@ -103,6 +103,7 @@ void client_fun() {
 
 int main(int argc, char** argv) {
     flag::init(argc, argv);
+    log::init();
 
     go(server_fun);
     sleep::ms(32);

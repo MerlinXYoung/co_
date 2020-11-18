@@ -13,7 +13,7 @@ end
 for _, test in ipairs(all_tests()) do
 target(test[1])
     set_kind("binary")
-    set_default(false)
+    set_default(true)
     add_deps("libco")
     add_files(test[2])
 end
