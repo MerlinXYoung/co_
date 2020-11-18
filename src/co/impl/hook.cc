@@ -1,6 +1,7 @@
 #ifndef _WIN32
 
 #include "hook.h"
+#include "dbg.h"
 #include "scheduler.h"
 #include "io_event.h"
 #include "co/co.h"
@@ -15,7 +16,13 @@
 #include <cstdarg>
 
 DEF_uint32(min_fd_size, 1024*10 , "#0 min size of file descriptor, default: 1024*10");
-
+template<class Stream>
+inline Stream& operator<<(Stream& os, const struct sockaddr& addr)
+{
+    os<<inet_ntoa(force_cast<const sockaddr_in*>(&addr)->sin_addr)
+        <<":"<<ntoh16(force_cast<const sockaddr_in*>(&addr)->sin_port);
+    return os;
+}
 namespace co {
 
 class HookInfo {
@@ -262,9 +269,12 @@ int fcntl(int fildes, int cmd, ...)
 	{
 		return __LINE__;
 	}
+    
 
+    COLOG << "fd:"<<fildes <<" cmd:"<<cmd;
 	va_list arg_list;
 	va_start( arg_list,cmd );
+
 
 	int ret = -1;
 	auto lp = gHook().get_by_fd( fildes );
@@ -356,6 +366,9 @@ int setsockopt(int fd, int level, int option_name,
 	// 	return g_sys_setsockopt_func( fd,level,option_name,option_value,option_len );
 	// }
 	auto lp = gHook().get_by_fd( fd );
+    COLOG << "fd:"<< fd << " level:" << level 
+        << " option_name:" << option_name << "option_value:" << option_value
+        << " option_len:" << option_value;
 
 	if( lp && SOL_SOCKET == level )
 	{
@@ -392,10 +405,13 @@ int socket(int domain, int type, int protocol)
     init_hook(socket);
     if (!gSched) return fp_socket(domain,type,protocol);
 
-    if( type & SOCK_NONBLOCK )
-        return fp_socket(domain,type,protocol);
+    
+    // if( type & SOCK_NONBLOCK )
+    //     return fp_socket(domain,type,protocol);
 
     int fd = fp_socket(domain,type,protocol);
+    COLOG << "domain:"<< domain <<" type:" << type
+        << " protocol:" << protocol <<" > fd:"<<fd ;
 	if( fd < 0 )
 	{
 		return fd;
@@ -416,6 +432,8 @@ int connect(int fd, const struct sockaddr* addr, socklen_t addrlen) {
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_connect(fd, addr, addrlen);
 
+    COLOG << "fd:"<< fd <<" (" << *addr <<")"
+        << " addrlen:" << addrlen ;
     int r;
     r = co::connect(fd, addr, addrlen, p->send_timeout());
     if (r == -1 && errno == ETIMEDOUT) errno = EINPROGRESS; // set errno to EINPROGRESS
@@ -434,6 +452,8 @@ int accept(int fd, struct sockaddr* addr, socklen_t* addrlen) {
     IoEvent ev(fd, EV_read);
     do {
         int conn_fd = fp_accept(fd, addr, addrlen);
+        COLOG << "conn_fd:"<< fd << " (" << *addr <<")"
+        << " addrlen:" << *addrlen ;
         if (conn_fd != -1) return conn_fd;
 
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -447,8 +467,9 @@ int accept(int fd, struct sockaddr* addr, socklen_t* addrlen) {
 int shutdown(int fd, int how) {
     init_hook(shutdown);
     if (!gSched) return fp_shutdown(fd, how);
-
+    
     char c = (how == SHUT_RD ? 'r' : (how == SHUT_WR ? 'w' : 'b'));
+    COLOG << "fd:"<< fd << " how:"<< c;
     auto p = gHook().on_shutdown(fd, c);
     // if (!p->hookable()) return fp_shutdown(fd, how);
     if(p) return fp_shutdown(fd, how);
@@ -458,7 +479,7 @@ int shutdown(int fd, int how) {
 int close(int fd) {
     init_hook(close);
     if (!gSched) return fp_close(fd);
-
+    COLOG << "fd:"<< fd ;
     gHook().free_by_fd(fd);
     // if (!p->hookable()) return fp_close(fd);
     return co::close(fd);
@@ -475,6 +496,8 @@ ssize_t read(int fd, void* buf, size_t count) {
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_read(fd, buf, count);
 
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" count:"<<count;
+
     IoEvent ev(fd, EV_read);
     do_hook(fp_read(fd, buf, count), ev, p->recv_timeout());
 }
@@ -486,6 +509,8 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_readv(fd, iov, iovcnt);
 
+    COLOG << "fd:"<< fd << " iovec:"<< iov <<" iovcnt:"<<iovcnt;
+
     IoEvent ev(fd, EV_read);
     do_hook(fp_readv(fd, iov, iovcnt), ev, p->recv_timeout());
 }
@@ -496,7 +521,7 @@ ssize_t recv(int fd, void* buf, size_t len, int flags) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_recv(fd, buf, len, flags);
-
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<<flags;
     IoEvent ev(fd, EV_read);
     do_hook(fp_recv(fd, buf, len, flags), ev, p->recv_timeout());
 }
@@ -507,7 +532,7 @@ ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_recvfrom(fd, buf, len, flags, addr, addrlen);
-
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<<flags;
     IoEvent ev(fd, EV_read);
     do_hook(fp_recvfrom(fd, buf, len, flags, addr, addrlen), ev, p->recv_timeout());
 }
@@ -518,7 +543,7 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_recvmsg(fd, msg, flags);
-
+    COLOG << "fd:"<< fd << " msg:"<< msg  <<" flags:"<<flags;
     IoEvent ev(fd, EV_read);
     do_hook(fp_recvmsg(fd, msg, flags), ev, p->recv_timeout());
 }
@@ -529,7 +554,7 @@ ssize_t write(int fd, const void* buf, size_t count) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_write(fd, buf, count);
-
+COLOG << "fd:"<< fd << " buf:"<< buf <<" count:"<<count;
     IoEvent ev(fd, EV_write);
     do_hook(fp_write(fd, buf, count), ev, p->send_timeout());
 }
@@ -540,7 +565,7 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_writev(fd, iov, iovcnt);
-
+    COLOG << "fd:"<< fd << " iovec:"<< iov <<" iovcnt:"<<iovcnt;
     IoEvent ev(fd, EV_write);
     do_hook(fp_writev(fd, iov, iovcnt), ev, p->send_timeout());
 }
@@ -551,7 +576,7 @@ ssize_t send(int fd, const void* buf, size_t len, int flags) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_send(fd, buf, len, flags);
-
+COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<< flags;
     IoEvent ev(fd, EV_write);
     do_hook(fp_send(fd, buf, len, flags), ev, p->send_timeout());
 }
@@ -562,7 +587,8 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_sendto(fd, buf, len, flags, addr, addrlen);
-
+COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<< flags
+    << "addr:"<<*addr <<" addrlen:" <<addrlen;
     IoEvent ev(fd, EV_write);
     do_hook(fp_sendto(fd, buf, len, flags, addr, addrlen), ev, p->send_timeout());
 }
@@ -573,7 +599,7 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_sendmsg(fd, msg, flags);
-
+COLOG << "fd:"<< fd << " msg:"<< msg <<" flags:"<< flags;
     IoEvent ev(fd, EV_write);
     do_hook(fp_sendmsg(fd, msg, flags), ev, p->send_timeout());
 }
