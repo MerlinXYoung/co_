@@ -55,10 +55,12 @@ class fastring : public fast::stream {
     fastring& operator=(const std::string& s);
     fastring& operator=(const char* s);
 
-    fastring& append(const void* p, size_t n);
+    fastring& append(const char* s, size_t len){
+        return (fastring&) fast::stream::_Append(s, len);
+    }
  
     fastring& append(const char* s) {
-        return this->append(s, strlen(s));
+        return append(s, (size_t)strlen(s));
     }
 
     fastring& append(const fastring& s);
@@ -395,3 +397,24 @@ struct hash<fastring> {
     }
 };
 } // std
+
+#include <cstdarg>
+/*
+* %% %
+* %b bool
+* %c char
+* %d int
+* %u uint
+* %ld int64
+* %lu uint64
+* %f flat;
+* %lf double;
+* %s cstring
+* %.*s int chars
+* %x hex
+* %lx uint64 hex
+* %p pointer
+*/
+
+void favsprintf(fast::stream& oss, const char* fmt, va_list vlist);
+void fasprintf(fast::stream& oss, const char* fmt, ...);

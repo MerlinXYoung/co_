@@ -1,4 +1,5 @@
 #include "co/fastring.h"
+#include <cstring>
 
 fastring& fastring::operator=(const fastring& s) {
     if (&s == this) return *this;
@@ -35,20 +36,20 @@ fastring& fastring::operator=(const char* s) {
     return *this;
 }
 
-fastring& fastring::append(const void* x, size_t n) {
-    const char* p = (const char*) x;
+// fastring& fastring::append(const void* x, size_t n) {
+//     const char* p = (const char*) x;
 
-    if (!this->_Inside(p)) {
-        return (fastring&) this->_Append(p, n);
-    } else {
-        assert(p + n <= _p + _size);
-        size_t pos = p - _p;
-        this->_Ensure(n);
-        memcpy(_p + _size, _p + pos, n);
-        _size += n;
-        return *this;
-    }
-}
+//     if (!this->_Inside(p)) {
+//         return (fastring&) this->_Append(p, n);
+//     } else {
+//         assert(p + n <= _p + _size);
+//         size_t pos = p - _p;
+//         this->_Ensure(n);
+//         memcpy(_p + _size, _p + pos, n);
+//         _size += n;
+//         return *this;
+//     }
+// }
 
 fastring& fastring::append(const fastring& s) {
     if (&s != this) {
@@ -210,4 +211,236 @@ fastring& fastring::tolower() {
         if ('A' <= c && c <= 'Z') c ^= 32;
     }
     return *this;
+}
+
+void favsprintf(fast::stream& oss, const char* fmt, va_list vlist)
+{
+    if(!fmt) return;
+#if 1
+    do{
+        const char* p = strchr(fmt,'%');
+        if(!p){
+            oss<<fmt;
+            break;
+        }
+        if(p!=fmt)
+            oss.append(fmt, p-fmt);
+        fmt=++p;
+        switch(*fmt){
+            case '\0':{
+                oss.append('%');
+                ++fmt;
+            }break;
+            case '%':{
+                oss.append('%');
+                ++fmt;
+            }break;
+            case 'b':{
+                bool arg = va_arg(vlist, bool);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'c':{
+                char arg = va_arg(vlist, char);
+                oss.append(arg);
+                ++fmt;
+            }break;
+            case 'd':{
+                int arg = va_arg(vlist, int);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'u':{
+                uint32 arg = va_arg(vlist, uint32);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'f':{
+                float arg = va_arg(vlist, float);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'x':{
+                uint32 arg = va_arg(vlist, uint32);
+                oss.append_hex(arg);
+                ++fmt;
+            }break;
+            case 'p':{
+                void* arg = va_arg(vlist, void*);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'l':{
+                ++fmt;
+                switch(*fmt){
+                    case 'd':{
+                        int64 arg = va_arg(vlist, int64);
+                        oss<<arg;
+                        ++fmt;
+                    }break;
+                    case 'u':{
+                        uint64 arg = va_arg(vlist, uint64);
+                        oss<<arg;
+                        ++fmt;
+                    }break;
+                    case 'f':{
+                        double arg = va_arg(vlist, double);
+                        oss<<arg;
+                        ++fmt;
+                    }break;
+                    case 'x':{
+                        uint64 arg = va_arg(vlist, uint64);
+                        oss.append_hex(arg);
+                        ++fmt;
+                    }break;
+                    default:{
+                        oss.append(fmt-1, 3);
+                        ++fmt;
+                    }break;
+                }
+
+            }break;
+            case 's':{
+                const char* arg = va_arg(vlist, const char*);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case '.':{
+                if(strncmp(fmt+1, "*s", 2) == 0){
+                    int arg1 = va_arg(vlist, int);
+                    const char* arg2 = va_arg(vlist, const char*);
+                    oss.append(arg2, (size_t)arg1);
+                    fmt+=3;
+                }
+                else{
+                    oss.append(fmt-1,2);
+                    ++fmt;
+                }
+                
+            }break;
+            default:{
+                oss.append(fmt-1,2);
+                ++fmt;
+            }break;
+            
+        }
+    }while(*fmt);
+
+#else
+    while(*fmt != '\0'){
+        if(*fmt != '%'){
+            oss.append(*fmt);
+            continue;
+        }
+        ++fmt;
+        switch(*fmt){
+            case '\0':{
+                oss.append('%');
+                ++fmt;
+            }break;
+            case '%':{
+                oss.append('%');
+                ++fmt;
+            }break;
+            case 'b':{
+                bool arg = va_arg(vlist, bool);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'c':{
+                char arg = va_arg(vlist, char);
+                oss.append(arg);
+                ++fmt;
+            }break;
+            case 'd':{
+                int arg = va_arg(vlist, int);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'u':{
+                uint32 arg = va_arg(vlist, uint32);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'f':{
+                float arg = va_arg(vlist, float);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'x':{
+                uint32 arg = va_arg(vlist, uint32);
+                oss.append_hex(arg);
+                ++fmt;
+            }break;
+            case 'p':{
+                void* arg = va_arg(vlist, void*);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case 'l':{
+                ++fmt;
+                switch(*fmt){
+                    case 'd':{
+                        int64 arg = va_arg(vlist, int64);
+                        oss<<arg;
+                        ++fmt;
+                    }break;
+                    case 'u':{
+                        uint64 arg = va_arg(vlist, uint64);
+                        oss<<arg;
+                        ++fmt;
+                    }break;
+                    case 'f':{
+                        double arg = va_arg(vlist, double);
+                        oss<<arg;
+                        ++fmt;
+                    }break;
+                    case 'x':{
+                        uint64 arg = va_arg(vlist, uint64);
+                        oss.append_hex(arg);
+                        ++fmt;
+                    }break;
+                    default:{
+                        oss.append(fmt-1, 3);
+                        ++fmt;
+                    }break;
+                }
+
+            }break;
+            case 's':{
+                const char* arg = va_arg(vlist, const char*);
+                oss<<arg;
+                ++fmt;
+            }break;
+            case '.':{
+                if(strncmp(fmt+1, "*s", 2) == 0){
+                    int arg1 = va_arg(vlist, int);
+                    const char* arg2 = va_arg(vlist, const char*);
+                    oss.append(arg2, (size_t)arg1);
+                    fmt+=3;
+                }
+                else{
+                    oss.append(fmt-1,2);
+                    ++fmt;
+                }
+                
+            }break;
+            default:{
+                oss.append(fmt-1,2);
+                ++fmt;
+            }break;
+            
+        }
+        
+    }
+#endif
+}
+void fasprintf(fast::stream& oss, const char* fmt, ...)
+{
+    if(!fmt) return;
+
+    va_list arg_list;
+	va_start( arg_list,fmt );
+    favsprintf(oss, fmt, arg_list);
+    va_end(arg_list);
 }

@@ -1,5 +1,6 @@
 #include "co/unitest.h"
 #include "co/fastring.h"
+#include <cstdio>
 
 namespace test {
 
@@ -281,6 +282,76 @@ DEF_test(fastring) {
         EXPECT_EQ(s + a, "againhello");
         EXPECT_EQ(a + c, "hellox");
         EXPECT_EQ(c + a, "xhello");
+    }
+
+    DEF_case(printf){
+        fastring a;
+
+        fasprintf(a, "888");
+        EXPECT_EQ(a, "888");
+
+        a.clear();
+        fasprintf(a, "%%");
+        EXPECT_EQ(a, "%");
+
+        a.clear();
+        fasprintf(a, "%8");
+        EXPECT_EQ(a, "%8");
+
+        a.clear();
+        fasprintf(a, "%c", 'b');
+        EXPECT_EQ(a, "b");
+
+        a.clear();
+        fasprintf(a, "%s", 'abc');
+        EXPECT_EQ(a, "abc");
+
+        a.clear();
+        fasprintf(a, "%b", true);
+        EXPECT_EQ(a, "true");
+
+        a.clear();
+        fasprintf(a, "%.*s", 5, "1234567");
+        EXPECT_EQ(a, "12345");
+
+        a.clear();
+        fasprintf(a, "%d", 123L);
+        EXPECT_EQ(a, "123");
+
+        a.clear();
+        fasprintf(a, "%u", 12345U);
+        EXPECT_EQ(a, "12345");
+
+        a.clear();
+        fasprintf(a, "%x", 257U);
+        EXPECT_EQ(a, "0x01ff");
+
+        a.clear();
+        fasprintf(a, "%ld", -10000000000LL);
+        EXPECT_EQ(a, "-10000000000");
+
+        a.clear();
+        fasprintf(a, "%lu", 10000000000U);
+        EXPECT_EQ(a, "10000000000");
+
+        a.clear();
+        fasprintf(a, "%lx", 0xffffffffff);
+        EXPECT_EQ(a, "0xffffffffff");
+
+        a.clear();
+        fasprintf(a, "%f", 0.001);
+        EXPECT_EQ(a, "0.001");
+
+        a.clear();
+        fasprintf(a, "%lf", (double)1.001);
+        EXPECT_EQ(a, "1.001");
+
+        a.clear();
+        fasprintf(a, "%p", &a);
+        char buf[64];
+        auto len = fast::u64toa((uint64)&a, buf);
+        buf[len]=0;
+        EXPECT_EQ(a, fastring(buf, len));
     }
 }
 
