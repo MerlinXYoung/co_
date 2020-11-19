@@ -2,6 +2,7 @@
 
 #include "flag.h"
 #include "fastream.h"
+#include "fastring.h"
 #include "atomic.h"
 #include "thread.h"
 
@@ -119,11 +120,13 @@ using namespace ___;
 //
 // LOG << "hello world " << 23;
 // WLOG_IF(1 + 1 == 2) << "xx";
-#define DLOG  if (FLG_min_log_level <= log::xx::debug) \
-              log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::debug).fs()
-#define LOG   log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::info).fs()
-#define WLOG  log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::warning).fs()
-#define ELOG  log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, log::xx::error).fs()
+#define LOGGER(lvl) \
+if (FLG_min_log_level <= lvl) log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, lvl).fs()
+
+#define DLOG  LOGGER(log::xx::debug)
+#define LOG   LOGGER(log::xx::info)
+#define WLOG  LOGGER(log::xx::warning)
+#define ELOG  LOGGER(log::xx::error)
 #define _FLOG log::xx::FatalLogSaver(__FILE__, __LINE__, __FUNCTION__).fs()
 #define FLOG  _FLOG << "fatal error! "
 
@@ -132,6 +135,35 @@ using namespace ___;
 #define WLOG_IF(cond) if (cond) WLOG
 #define ELOG_IF(cond) if (cond) ELOG
 #define FLOG_IF(cond) if (cond) FLOG
+
+#define LOG_LVL(lvl, fmt, ...) \
+do{\
+if (FLG_min_log_level <= lvl){ \
+if (log::xx::xxLog == nullptr) log::xx::xxLog = new fastream(128);\
+log::xx::xxLog->clear();\
+sprintf(*log::xx::xxLog, "%cmmdd hh:MM:ss %u %s:%u(%s)] " fmt "\n", "DIWEF"[lvl], current_thread_id(), __FILE__, __LINE__, __func__, __VA_ARGS__);\
+log::xx::push_level_log(log::xx::xxLog, lvl);\
+}\
+}while(0)
+
+#define LOG_DEBUG(fmt, ...) LOG_LVL(log::xx::debug, fmt, __VA_ARGS__)
+#define LOG_INFO(fmt, ...) LOG_LVL(log::xx::info, fmt, __VA_ARGS__)
+#define LOG_WARN(fmt, ...) LOG_LVL(log::xx::warning, fmt, __VA_ARGS__)
+#define LOG_ERROR(fmt, ...) LOG_LVL(log::xx::error, fmt, __VA_ARGS__)
+#define LOG_FATAL(fmt, ...) \
+do{\
+if (log::xx::xxLog == nullptr) log::xx::xxLog = new fastream(128);\
+log::xx::xxLog->clear();\
+sprintf(*log::xx::xxLog, " %u %s:%u(%s)] " fmt "\n", current_thread_id(), __FILE__, __LINE__, __func__, __VA_ARGS__);\
+log::xx::push_fatal_log(log::xx::xxLog);\
+}while(0)
+
+#define LOG_DEBUG_IF(cond) if (cond) LOG_DEBUG
+#define LOG_INFO_IF(cond) if (cond) LOG_INFO
+#define LOG_WARN_IF(cond) if (cond) LOG_WARN
+#define LOG_ERROR_IF(cond) if (cond) LOG_ERROR
+#define LOG_FATAL_IF(cond) if (cond) LOG_FATAL
+
 
 #define CHECK(cond) \
     if (!(cond)) _FLOG << "check failed: " #cond "! "

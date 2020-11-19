@@ -38,6 +38,19 @@ int main(int argc, char** argv) {
         WLOG << "This is WLOG (warning).. " << 23;
         ELOG << "This is ELOG (error).. " << 23;
         //FLOG << "This is FLOG (fatal).. " << 23;
+
+        LOG_DEBUG("this debug for player(%ld)", 9567898);
+        LOG_INFO("this info for player(%ld)", 9567898);
+        LOG_WARN("this warning for player(%ld)", 9567898);
+        LOG_ERROR("this error for player(%ld)", 9567898);
+        // LOG_FATAL("this fatal for player(%ld)", 95678);
+
+
+        LOG_DEBUG_IF(1+2>3)("this debug for player(%ld)", 9567898);
+        LOG_INFO_IF(5>4)("this info for player(%ld)", 9567898);
+        LOG_WARN_IF(5>4)("this warning for player(%ld)", 9567898);
+        LOG_ERROR_IF(5>4)("this error for player(%ld)", 9567898);
+        LOG_FATAL_IF(5>4)("this fatal for player(%ld)", 95678); 
     }
 
     return 0;

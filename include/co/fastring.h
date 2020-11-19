@@ -401,20 +401,20 @@ struct hash<fastring> {
 #include <cstdarg>
 /*
 * %% %
-* %b bool
+* %b/B bool
 * %c char
 * %d int
 * %u uint
 * %ld int64
 * %lu uint64
-* %f flat;
-* %lf double;
+* %f long flat;
+* %lf long double;
 * %s cstring
 * %.*s int chars
-* %x hex
-* %lx uint64 hex
-* %p pointer
+* %x/X hex
+* %lx/X uint64 hex
+* %p/X pointer
 */
 
-void favsprintf(fast::stream& oss, const char* fmt, va_list vlist);
-void fasprintf(fast::stream& oss, const char* fmt, ...);
+void vsprintf(fast::stream& oss, const char* fmt, va_list vlist);
+void sprintf(fast::stream& oss, const char* fmt, ...);

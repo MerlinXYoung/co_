@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+
 namespace fast {
 
 // double to ascii string
@@ -18,9 +19,19 @@ inline int dtoa(double v, char* buf) {
     return dtoa_milo(v, buf);
 }
 
-// integer to hex string  (255 -> "0xff". eg.)
+// integer to hex string  (255 -> "ff". eg.)
 int u32toh(uint32 v, char* buf);
 int u64toh(uint64 v, char* buf);
+// integer to hex string  (255 -> "FF". eg.)
+int u32tohex(uint32 v, char* buf);
+int u64tohex(uint64 v, char* buf);
+
+// integer to hex string  (255 -> "0xff". eg.)
+int u32toh_with_prefix(uint32 v, char* buf);
+int u64toh_with_prefix(uint64 v, char* buf);
+// integer to hex string  (255 -> "0xFF". eg.)
+int u32tohex_with_prefix(uint32 v, char* buf);
+int u64tohex_with_prefix(uint64 v, char* buf);
 
 // integer to ascii string
 int u32toa(uint32 v, char* buf);
@@ -37,9 +48,54 @@ inline int i64toa(int64 v, char* buf) {
     *buf = '-';
     return u64toa((uint64)(-v), buf + 1) + 1;
 }
+// template<bool> class hex_stream;
+template<class T>
+struct _hex{
+    inline explicit _hex(T _v):v(_v){}
+    T v;
+};
+
+template<class T>
+struct _HEX{
+    inline explicit _HEX(T _v):v(_v){}
+    T v;
+};
+
+__forceinline inline _hex<uint32> hex(int32 v){
+    return _hex<uint32>((uint32)v);
+}
+
+__forceinline inline _hex<uint64> hex(int64 v){
+    return _hex<uint64>((uint64)v);
+}
+
+__forceinline inline _hex<uint32> hex(uint32 v){
+    return _hex<uint32>(v);
+}
+
+__forceinline inline _hex<uint64> hex(uint64 v){
+    return _hex<uint64>(v);
+}
+
+__forceinline inline _HEX<uint32> HEX(int32 v){
+    return _HEX<uint32>((uint32)v);
+}
+
+__forceinline inline _HEX<uint64> HEX(int64 v){
+    return _HEX<uint64>((uint64)v);
+}
+
+__forceinline inline _HEX<uint32> HEX(uint32 v){
+    return _HEX<uint32>(v);
+}
+
+__forceinline inline _HEX<uint64> HEX(uint64 v){
+    return _HEX<uint64>(v);
+}
 
 class stream {
   public:
+
     constexpr stream() noexcept : _cap(0), _size(0), _p(0) {}
     
     explicit stream(size_t cap)
@@ -192,16 +248,53 @@ class stream {
     }
 
     inline stream& append_hex(uint32 v) {
-        this->_Ensure(24);
-        _size += fast::u32toa(v, _p + _size);
+        this->_Ensure(8);
+        _size += fast::u32toh(v, _p + _size);
+        return *this;
+    }
+
+    inline stream& append_hex_upper(uint32 v) {
+        this->_Ensure(8);
+        _size += fast::u32tohex(v, _p + _size);
         return *this;
     }
 
     inline stream& append_hex(uint64 v) {
-        this->_Ensure(24);
-        _size += fast::u64toa(v, _p + _size);
+        this->_Ensure(16);
+        _size += fast::u64toh(v, _p + _size);
         return *this;
     }
+
+    inline stream& append_hex_upper(uint64 v) {
+        this->_Ensure(16);
+        _size += fast::u64tohex(v, _p + _size);
+        return *this;
+    }
+
+    inline stream& append_hex_with_prefix(uint32 v) {
+        this->_Ensure(10);
+        _size += fast::u32toh_with_prefix(v, _p + _size);
+        return *this;
+    }
+
+    inline stream& append_hex_upper_with_prefix(uint32 v) {
+        this->_Ensure(10);
+        _size += fast::u32tohex_with_prefix(v, _p + _size);
+        return *this;
+    }
+
+    inline stream& append_hex_with_prefix(uint64 v) {
+        this->_Ensure(18);
+        _size += fast::u64toh_with_prefix(v, _p + _size);
+        return *this;
+    }
+
+    inline stream& append_hex_upper_with_prefix(uint64 v) {
+        this->_Ensure(18);
+        _size += fast::u64tohex_with_prefix(v, _p + _size);
+        return *this;
+    }
+
     inline stream& append(const void* p, size_t n){
         return _Append(p, n);
     }
@@ -283,8 +376,10 @@ class stream {
     }
 
     inline stream& operator<<(const void* v) {
-        this->_Ensure(20);
-        _size += fast::u64toh((uint64)v, _p + _size);
+        this->_Ensure(18);
+        _p[_size++]='0';
+        _p[_size++]='x'; 
+        _size += fast::u64toh((uint64)v, _p + _size) ;
         return *this;
     }
 
@@ -300,6 +395,19 @@ class stream {
         return *this;
     }
 
+    // inline hex_stream<false>& operator<<(_hex);
+
+    // inline hex_stream<true>& operator<<(_HEX);
+
+    template<class T>
+    inline stream& operator<<(_hex<T> h){
+        return append_hex(h.v);
+    }
+
+    template<class T>
+    inline stream& operator<<(_HEX<T> h){
+        return append_hex_upper(h.v);
+    }
 
   protected:
     inline void _Ensure(size_t n) {
@@ -316,6 +424,28 @@ class stream {
     size_t _cap;
     size_t _size;
     char* _p;
+};
+
+template<bool Upper=false>
+class hex_stream : public stream{
+public:
+    using stream::stream;
+
+    inline stream& operator<<(uint32 v){
+        printf("hex:%u\n", v);
+        if constexpr (Upper)
+            return append_hex_upper(v);
+        else
+            return append_hex(v);
+    }
+
+    inline stream& operator<<(uint64 v){
+        printf("hex:%lu\n", v);
+        if constexpr (Upper)
+            return append_hex_upper(v);
+        else
+            return append_hex(v);
+    }
 };
 
 } // namespace fast

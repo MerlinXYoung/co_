@@ -48,7 +48,12 @@ typedef uint64_t uint64;
     void operator=(const Type&) = delete
 
 template<typename To, typename From>
-inline To force_cast(From f) {
+inline To force_cast(From& f) {
+    return (To) f;
+}
+
+template<typename To, typename From>
+inline To force_cast(From* f) {
     return (To) f;
 }
 

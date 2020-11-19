@@ -15,12 +15,12 @@
 #include <mutex>
 #include <cstdarg>
 
-DEF_uint32(min_fd_size, 1024*10 , "#0 min size of file descriptor, default: 1024*10");
+DEF_uint32(co_hook_min_size, 1024*10 , "#0 co hook min size of file descriptor, default: 10k");
 template<class Stream>
 inline Stream& operator<<(Stream& os, const struct sockaddr& addr)
 {
-    os<<inet_ntoa(force_cast<const sockaddr_in*>(&addr)->sin_addr)
-        <<":"<<ntoh16(force_cast<const sockaddr_in*>(&addr)->sin_port);
+    os<<inet_ntoa(force_cast<const sockaddr_in&>(addr).sin_addr)
+        <<":"<<ntoh16(force_cast<const sockaddr_in&>(addr).sin_port);
     return os;
 }
 namespace co {
@@ -83,9 +83,9 @@ class Hook {
   public:
     // Hook() : _hk(co::max_sched_num()) {}
     Hook(){
-        _infos = (HookInfo**) malloc(sizeof(HookInfo*) * FLG_min_fd_size);
+        _infos = (HookInfo**) malloc(sizeof(HookInfo*) * FLG_co_hook_min_size);
         assert(_infos);
-        _size = FLG_min_fd_size;
+        _size = FLG_co_hook_min_size;
     }
     ~Hook() = default;
 
