@@ -9,21 +9,21 @@ DEF_int32(co_max_send_size, 1024 * 1024, "#1 max size for a single send");
 
 namespace co {
 
-#ifdef SOCK_NONBLOCK
-sock_t socket(int domain, int type, int protocol) {
-    return ::socket(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol);
-}
+// #ifdef SOCK_NONBLOCK
+// sock_t socket(int domain, int type, int protocol) {
+//     return ::socket(domain, type | /*SOCK_NONBLOCK |*/ SOCK_CLOEXEC, protocol);
+// }
 
-#else
-sock_t socket(int domain, int type, int protocol) {
-    sock_t fd = ::socket(domain, type, protocol);
-    if (fd != -1) {
-        co::set_nonblock(fd);
-        co::set_cloexec(fd);
-    }
-    return fd;
-}
-#endif
+// #else
+// sock_t socket(int domain, int type, int protocol) {
+//     sock_t fd = ::socket(domain, type, protocol);
+//     if (fd != -1) {
+//         co::set_nonblock(fd);
+//         co::set_cloexec(fd);
+//     }
+//     return fd;
+// }
+// #endif
 
 int close(sock_t fd, int ms) {
     CHECK(gSched) << "must be called in coroutine..";
@@ -62,12 +62,16 @@ sock_t accept(sock_t fd, void* addr, int* addrlen) {
 
     do {
       #ifdef SOCK_NONBLOCK
-        sock_t connfd = fp_accept4(fd, (sockaddr*)addr, (socklen_t*)addrlen, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        if (connfd != -1) return connfd;
+        sock_t connfd = fp_accept4(fd, (sockaddr*)addr, (socklen_t*)addrlen, SOCK_CLOEXEC);
+        COLOG << "fd:" << fd << " accept >" <<connfd;
+        if (connfd != -1) {
+            fcntl(connfd, F_SETFL, fp_fcntl(connfd, F_GETFL, 0));
+            return connfd;
+        }
       #else
         sock_t connfd = fp_accept(fd, (sockaddr*)addr, (socklen_t*)addrlen);
         if (connfd != -1) {
-            co::set_nonblock(connfd);
+            fcntl(connfd, F_SETFL, fp_fcntl(connfd, F_GETFL, 0));
             co::set_cloexec(connfd);
             return connfd;
         }

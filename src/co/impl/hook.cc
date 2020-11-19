@@ -81,7 +81,6 @@ class HookInfo {
 
     int32 _send_timeout{0};
     int32 _recv_timeout{0};
-
     int32 _user_flags{0};
 };
 
@@ -445,7 +444,10 @@ int socket(int domain, int type, int protocol)
 		return fd;
 	}
 
-	gHook().new_by_fd( fd );
+	auto phi = gHook().new_by_fd( fd );
+    if ( type & SOCK_NONBLOCK )
+        phi->set_user_flags(phi->user_flags()| O_NONBLOCK);
+        
 	
 	fcntl( fd, F_SETFL, fp_fcntl(fd, F_GETFL,0 ) );
 

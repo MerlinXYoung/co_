@@ -40,7 +40,7 @@ void on_new_connection(void* p) {
 }
 
 void server_fun() {
-    sock_t fd = co::tcp_socket();
+    sock_t fd = socket(AF_INET,SOCK_STREAM, IPPROTO_TCP);
     co::set_reuseaddr(fd);
 
     sock_t connfd;
@@ -54,8 +54,9 @@ void server_fun() {
     while (true) {
         addrlen = sizeof(sockaddr_in);
         connfd = co::accept(fd, &addr, &addrlen);
+        COLOG << "accept new fd:"<<connfd;
         if (connfd == -1) continue;
-
+        
         Connection* conn = new Connection;
         conn->fd = connfd;
         conn->ip = co::ip_str(&addr);
@@ -68,12 +69,16 @@ void server_fun() {
 }
 
 void client_fun() {
-    sock_t fd = co::tcp_socket();
+    sock_t fd = socket(AF_INET,SOCK_STREAM, IPPROTO_TCP);
 
     struct sockaddr_in addr;
     co::init_ip_addr(&addr, FLG_ip.c_str(), FLG_port);
 
-    co::connect(fd, &addr, sizeof(addr), 3000);
+    if(co::connect(fd, &addr, sizeof(addr), -1)== -1) 
+    {
+        COLOG <<"fd:" <<fd <<" connect error";
+        return ;
+    }
     co::set_tcp_nodelay(fd);
 
     char buf[8] = { 0 };
@@ -95,7 +100,7 @@ void client_fun() {
             break;
         } else {
             COLOG << "client recv " << fastring(buf, r) << '\n';
-            co::sleep(3000);
+            // co::sleep(3000);
         }
     }
 
@@ -108,11 +113,11 @@ int main(int argc, char** argv) {
 
     go(server_fun);
     sleep::ms(32);
-    for(size_t i=0;i<10000;i++){
-    go(client_fun);
+    for(size_t i=0;i<10;i++){
+        go(client_fun);
     }
 
-    while (true) sleep::sec(1024);
+    while (true) sleep::sec(60);
 
     return 0;
 }
