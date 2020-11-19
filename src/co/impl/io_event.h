@@ -48,6 +48,7 @@ class IoEvent {
     }
 
     bool wait(int ms=-1) {
+        COLOG << "fd:" << _fd << " " << ms << "ms ...";
         if (!_has_ev) _has_ev = gSched->add_event(_fd, _ev);
         if (ms < 0) { gSched->yield(); return true; }
 

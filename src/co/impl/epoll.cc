@@ -23,6 +23,7 @@ void Epoll::handle_ev_pipe() {
     int dummy;
     while (true) {
         int r = fp_read(_fds[0], &dummy, 4);
+        DLOG <<"fd:" << _fds[0] << " r:"<< r << " dummy:" << dummy;
         if (r != -1) {
             if (r < 4) break;
             continue;
@@ -46,10 +47,12 @@ inline void closesocket(sock_t& fd) {
 #ifdef __linux__
 Epoll::Epoll() : _signaled(0) {
     _efd = epoll_create(1024);
+    DLOG << "efd: " << _efd;
     CHECK_NE(_efd, -1) << "epoll create error: " << co::strerror();
     co::set_cloexec(_efd);
 
     CHECK_NE(::pipe(_fds), -1) << "create pipe error: " << co::strerror();
+    DLOG << "pipe:{" << _fds[0] <<", " << _fds[1]<<"}";
     co::set_cloexec(_fds[0]);
     co::set_cloexec(_fds[1]);
     co::set_nonblock(_fds[0]);
@@ -57,16 +60,19 @@ Epoll::Epoll() : _signaled(0) {
 }
 
 Epoll::~Epoll() {
+    DLOG <<"";
     this->close();
 }
 
 void Epoll::close() {
+    DLOG <<"efd:"<<_efd;
     co::closesocket(_efd);
     co::closesocket(_fds[0]);
     co::closesocket(_fds[1]);
 }
 
 bool Epoll::add_ev_read(int fd, int ud) {
+    DLOG << "fd:"<< fd << " ud:"<< ud;
     auto& x = _ev_map[fd];
     if (x >> 32) return true; // already exists
 
@@ -84,6 +90,7 @@ bool Epoll::add_ev_read(int fd, int ud) {
 }
 
 bool Epoll::add_ev_write(int fd, int ud) {
+    DLOG << "fd:"<< fd << " ud:"<< ud;
     auto& x = _ev_map[fd];
     if ((uint32)x) return true; // already exists
 
@@ -101,9 +108,11 @@ bool Epoll::add_ev_write(int fd, int ud) {
 }
 
 void Epoll::del_ev_read(int fd) {
+    DLOG << "fd:"<< fd ;
     auto it = _ev_map.find(fd);
     if (it == _ev_map.end() || !(it->second >> 32)) return; // not exists
 
+    DLOG << "fd:"<< fd << " ud:"<< (uint32)it->second;
     int r;
     if (!(uint32)it->second) {
         _ev_map.erase(it);
@@ -123,6 +132,7 @@ void Epoll::del_ev_write(int fd) {
     auto it = _ev_map.find(fd);
     if (it == _ev_map.end() || !(uint32)it->second) return; // not exists
 
+    DLOG << "fd:"<< fd << " ud:"<< (it->second >> 32);
     int r;
     if (!(it->second >> 32)) {
         _ev_map.erase(it);

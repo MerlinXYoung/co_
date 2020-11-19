@@ -1,4 +1,5 @@
 #include "co/all.h"
+#include "co/dbg.h"
 
 DEF_string(ip, "127.0.0.1", "ip");
 DEF_int32(port, 9988, "port");
@@ -26,11 +27,11 @@ void on_new_connection(void* p) {
             co::reset_tcp_socket(fd, 3000);
             break;
         } else {
-            COUT << "server recv " << fastring(buf, r);
-            COUT << "server send pong";
+            COLOG << "server recv " << fastring(buf, r);
+            COLOG << "server send pong";
             r = co::send(fd, "pong", 4);
             if (r == -1) {
-                COUT << "server send error: " << co::strerror();
+                COLOG << "server send error: " << co::strerror();
                 co::reset_tcp_socket(fd, 3000);
                 break;
             }
@@ -61,7 +62,7 @@ void server_fun() {
         conn->port = ntoh16(addr.sin_port);
 
         // create a new coroutine for this connection
-        COUT << "server accept new connection: " << conn->ip << ":" << conn->port;
+        COLOG << "server accept new connection: " << conn->ip << ":" << conn->port;
         co::go(on_new_connection, conn);
     }
 }
@@ -78,22 +79,22 @@ void client_fun() {
     char buf[8] = { 0 };
 
     while (true) {
-        COUT << "client send ping";
+        COLOG << "client send ping";
         int r = co::send(fd, "ping", 4);
         if (r == -1) {
-            COUT << "client send error: " << co::strerror();
+            COLOG << "client send error: " << co::strerror();
             break;
         }
 
         r = co::recv(fd, buf, 8);
         if (r == -1) {
-            COUT << "client recv error: " << co::strerror();
+            COLOG << "client recv error: " << co::strerror();
             break;
         } else if (r == 0) {
-            COUT << "server close the connection";
+            COLOG << "server close the connection";
             break;
         } else {
-            COUT << "client recv " << fastring(buf, r) << '\n';
+            COLOG << "client recv " << fastring(buf, r) << '\n';
             co::sleep(3000);
         }
     }
@@ -107,7 +108,9 @@ int main(int argc, char** argv) {
 
     go(server_fun);
     sleep::ms(32);
+    for(size_t i=0;i<10000;i++){
     go(client_fun);
+    }
 
     while (true) sleep::sec(1024);
 

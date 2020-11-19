@@ -1,7 +1,7 @@
 #ifndef _WIN32
 
 #include "hook.h"
-#include "dbg.h"
+#include "co/dbg.h"
 #include "scheduler.h"
 #include "io_event.h"
 #include "co/co.h"
@@ -16,13 +16,24 @@
 #include <cstdarg>
 
 DEF_uint32(co_hook_min_size, 1024*10 , "#0 co hook min size of file descriptor, default: 10k");
+
+#define HLOG 
+
 template<class Stream>
-inline Stream& operator<<(Stream& os, const struct sockaddr& addr)
+inline Stream& operator<<(Stream& os, const sockaddr& addr)
 {
-    os<<inet_ntoa(force_cast<const sockaddr_in&>(addr).sin_addr)
+    return os<<inet_ntoa(force_cast<const sockaddr_in&>(addr).sin_addr)
         <<":"<<ntoh16(force_cast<const sockaddr_in&>(addr).sin_port);
-    return os;
 }
+
+template<class Stream>
+inline Stream& operator<<(Stream& os, const pollfd& pfd)
+{
+    return os<< "pollfd:{" << pfd.fd << "," << pfd.events << "," << pfd.revents << "}";
+    
+}
+
+
 namespace co {
 
 class HookInfo {
@@ -91,12 +102,14 @@ class Hook {
 
     inline HookInfo* alloc_by_fd(int fd){
         if(_size <= fd){
+            COLOG << "fd:" << fd << "lock ...";
             lock_guard_type g(_lock);
             if(_size <= fd){
                 auto size = _size*3>>1;
                 _infos = (HookInfo**) realloc(_infos, sizeof(HookInfo*) * size);
                 assert(!_infos);
                 _size = size;
+                COLOG << "fd:" << fd << "new size " << _size ;
             }
         }
         return _infos[fd] = (HookInfo*) malloc(sizeof(HookInfo));
@@ -106,6 +119,7 @@ class Hook {
         assert(fd >= 0 && fd < _size);
         free(_infos[fd]);
         _infos[fd] = nullptr;
+        COLOG << "fd:" << fd << "free " ;
     }
 
     inline HookInfo* get_by_fd(int fd){
@@ -130,7 +144,7 @@ class Hook {
     HookInfo* on_shutdown(int fd, char c) {
         auto phi = get_by_fd(fd);
         assert(phi);
-
+        COLOG << "fd:" << fd << "shutdown "<< c ;
         if (c == 'r') {
             phi->set_recv_timeout(0);
             if (phi->send_timeout()==0) {
@@ -258,8 +272,22 @@ kevent_fp_t fp_kevent = 0;
             return -1; \
         } \
     } while (true)
-
-
+static const char* _fcntl_name_table[]={
+    "F_DUPFD",
+    "F_GETFD",
+    "F_SETFD",
+    "F_GETFL",
+    "F_SETFL",
+    "not support",
+    "not support",
+    "not support",
+    "F_SETOWN",
+    "F_GETOWN",
+};
+static inline const char* get_fcntl_name(int cmd){
+    if(cmd <0 || cmd>F_GETOWN) return "not support";
+    return _fcntl_name_table[cmd];
+}
 
 int fcntl(int fildes, int cmd, ...)
 {
@@ -269,9 +297,9 @@ int fcntl(int fildes, int cmd, ...)
 	{
 		return __LINE__;
 	}
-    
 
-    COLOG << "fd:"<<fildes <<" cmd:"<<cmd;
+
+    COLOG << "fd:"<<fildes <<" cmd:"<<get_fcntl_name(cmd);
 	va_list arg_list;
 	va_start( arg_list,cmd );
 
@@ -417,7 +445,7 @@ int socket(int domain, int type, int protocol)
 		return fd;
 	}
 
-	auto lp = gHook().new_by_fd( fd );
+	gHook().new_by_fd( fd );
 	
 	fcntl( fd, F_SETFL, fp_fcntl(fd, F_GETFL,0 ) );
 
@@ -448,14 +476,17 @@ int accept(int fd, struct sockaddr* addr, socklen_t* addrlen) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_accept(fd, addr, addrlen);
-
+    COLOG << "conn_fd:"<< fd ;
     IoEvent ev(fd, EV_read);
     do {
         int conn_fd = fp_accept(fd, addr, addrlen);
         COLOG << "conn_fd:"<< fd << " (" << *addr <<")"
         << " addrlen:" << *addrlen ;
-        if (conn_fd != -1) return conn_fd;
-
+        if (conn_fd != -1) {
+            p = gHook().new_by_fd(conn_fd);
+            fcntl(conn_fd, F_SETFL, fp_fcntl(conn_fd, F_GETFL, 0 ) );
+            return conn_fd;
+        }
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
             ev.wait();
         } else if (errno != EINTR) {
@@ -554,7 +585,7 @@ ssize_t write(int fd, const void* buf, size_t count) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_write(fd, buf, count);
-COLOG << "fd:"<< fd << " buf:"<< buf <<" count:"<<count;
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" count:"<<count;
     IoEvent ev(fd, EV_write);
     do_hook(fp_write(fd, buf, count), ev, p->send_timeout());
 }
@@ -576,7 +607,7 @@ ssize_t send(int fd, const void* buf, size_t len, int flags) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_send(fd, buf, len, flags);
-COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<< flags;
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<< flags;
     IoEvent ev(fd, EV_write);
     do_hook(fp_send(fd, buf, len, flags), ev, p->send_timeout());
 }
@@ -587,8 +618,8 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_sendto(fd, buf, len, flags, addr, addrlen);
-COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<< flags
-    << "addr:"<<*addr <<" addrlen:" <<addrlen;
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<< flags
+        << "addr:"<<*addr <<" addrlen:" <<addrlen;
     IoEvent ev(fd, EV_write);
     do_hook(fp_sendto(fd, buf, len, flags, addr, addrlen), ev, p->send_timeout());
 }
@@ -599,7 +630,7 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
 
     auto p = gHook().get_by_fd(fd);
     if (!p->hookable()) return fp_sendmsg(fd, msg, flags);
-COLOG << "fd:"<< fd << " msg:"<< msg <<" flags:"<< flags;
+    COLOG << "fd:"<< fd << " msg:"<< msg <<" flags:"<< flags;
     IoEvent ev(fd, EV_write);
     do_hook(fp_sendmsg(fd, msg, flags), ev, p->send_timeout());
 }
@@ -607,7 +638,7 @@ COLOG << "fd:"<< fd << " msg:"<< msg <<" flags:"<< flags;
 int poll(struct pollfd* fds, nfds_t nfds, int ms) {
     init_hook(poll);
     if (!gSched || ms == 0) return fp_poll(fds, nfds, ms);
-
+    COLOG << "fds[0]:" <<fds[0] << " nfds:" << nfds << " ms:" << ms;
     do {
         if (nfds == 1) {
             int fd = fds[0].fd;
@@ -624,6 +655,7 @@ int poll(struct pollfd* fds, nfds_t nfds, int ms) {
 
             gSched->yield();
             gSched->del_event(fd);
+            COLOG << "fds[0]:" <<fds[0] << " timeout:" << (ms > 0 && gSched->timeout());
             if (ms > 0 && gSched->timeout()) return 0;
 
             if (id != co::null_timer_id) gSched->del_timer(id);
@@ -636,6 +668,7 @@ int poll(struct pollfd* fds, nfds_t nfds, int ms) {
     do {
         int r = fp_poll(fds, nfds, 0);
         if (r != 0) return r;
+        COLOG << "fds[0]:" <<fds[0] << " nfds:" << nfds << " sleep 16ms ...";
         co::sleep(16);
         if (ms > 0 && (ms -= 16) < 0) return 0;
     } while (true);
@@ -678,6 +711,7 @@ unsigned int sleep(unsigned int n) {
 int usleep(useconds_t us) {
     init_hook(usleep);
     if (!gSched || us < 1000) return fp_usleep(us);
+    COLOG << " sleep " << us/1000<<"ms ...";
     gSched->sleep(us / 1000);
     return 0;
 }
@@ -688,7 +722,7 @@ int nanosleep(const struct timespec* req, struct timespec* rem) {
 
     int ms = (int) (req->tv_sec * 1000 + req->tv_nsec / 1000000);
     if (ms < 1) return fp_nanosleep(req, rem);
-
+    COLOG << " sleep " << ms<<"ms ...";
     gSched->sleep(ms);
     return 0;
 }
@@ -697,7 +731,7 @@ int nanosleep(const struct timespec* req, struct timespec* rem) {
 int epoll_wait(int epfd, struct epoll_event* events, int n, int ms) {
     init_hook(epoll_wait);
     if (!gSched || ms == 0) return fp_epoll_wait(epfd, events, n, ms);
-
+    COLOG << "epfd:" <<epfd <<" " <<ms <<"ms ...";
     IoEvent ev(epfd, EV_read);
     if (!ev.wait(ms)) return 0; // timeout
     return fp_epoll_wait(epfd, events, n, 0);
@@ -713,8 +747,11 @@ int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags) {
     IoEvent ev(fd, EV_read);
     do {
         int conn_fd = fp_accept4(fd, addr, addrlen, flags);
-        if (conn_fd != -1) return conn_fd;
-
+        if (conn_fd != -1) {
+            p = gHook().new_by_fd(conn_fd);
+            fcntl(conn_fd, F_SETFL, fp_fcntl(conn_fd, F_GETFL, 0));
+            return conn_fd;
+        }
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
             ev.wait();
         } else if (errno != EINTR) {
@@ -790,8 +827,8 @@ struct hostent* gethostbyname2(const char* name, int af) {
     int* err = (int*) fs.data();
 
     int r = -1;
-    while (r = gethostbyname2_r(name, af, ent,
-        (char*)(fs.data() + 8), fs.capacity() - 8, &res, err) == ERANGE &&
+    while ((r = gethostbyname2_r(name, af, ent,
+        (char*)(fs.data() + 8), fs.capacity() - 8, &res, err)) == ERANGE &&
         *err == NETDB_INTERNAL)
     {
         fs.reserve(fs.capacity() << 1);
@@ -813,8 +850,8 @@ struct hostent* gethostbyaddr(const void* addr, socklen_t len, int type) {
     int* err = (int*) fs.data();
 
     int r = -1;
-    while (r = gethostbyaddr_r(addr, len, type, ent,
-        (char*)(fs.data() + 8), fs.capacity() - 8, &res, err) == ERANGE &&
+    while ((r = gethostbyaddr_r(addr, len, type, ent,
+        (char*)(fs.data() + 8), fs.capacity() - 8, &res, err)) == ERANGE &&
         *err == NETDB_INTERNAL)
     {
         fs.reserve(fs.capacity() << 1);

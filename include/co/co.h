@@ -4,7 +4,7 @@
 #include "closure.h"
 #include "byte_order.h"
 #include "fastring.h"
-
+#include "log.h"
 #ifdef _WIN32
 #include <WinSock2.h>
 #include <ws2tcpip.h> // for inet_ntop...
@@ -331,10 +331,12 @@ inline void reset_tcp_socket(sock_t fd, int ms=0) {
 
 #ifndef _WIN32
 inline void set_nonblock(sock_t fd) {
+    DLOG << "fd:" <<fd;
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 }
 
 inline void set_cloexec(sock_t fd) {
+    DLOG << "fd:" <<fd;
     fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
 }
 #endif
