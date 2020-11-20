@@ -9,6 +9,7 @@ struct Connection {
     fastring ip; // peer ip
     int port;    // peer port
 };
+static size_t counter = 0;
 
 void on_new_connection(void* p) {
     std::unique_ptr<Connection> conn((Connection*)p);
@@ -27,7 +28,7 @@ void on_new_connection(void* p) {
             co::reset_tcp_socket(fd, 3000);
             break;
         } else {
-            COLOG << "server recv " << fastring(buf, r);
+            COLOG << "server recv " << fastring(buf, r)<<" "<<++counter;
             COLOG << "server send pong";
             r = co::send(fd, "pong", 4);
             if (r == -1) {
@@ -117,7 +118,9 @@ int main(int argc, char** argv) {
         go(client_fun);
     }
 
-    while (true) sleep::sec(60);
+    sleep::sec(60);
+    stop();
+    cout<<counter<<endl;
 
     return 0;
 }
