@@ -101,7 +101,7 @@ class LevelLogger {
         if (level < _config->min_log_level) return;
 
         MutexGuard g(_log_mutex);
-        memcpy((char*)(log->data() + 1), _time_str, 13);
+        memcpy((char*)(log->data() + 6), _time_str, 13);
 
         if (unlikely(_fs->size() >= _config->max_log_buffer_size)) {
             const char* p = strchr(_fs->data() + (_fs->size() >> 1) + 7, '\n');

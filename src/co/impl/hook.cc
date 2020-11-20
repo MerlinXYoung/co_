@@ -1,7 +1,7 @@
 #ifndef _WIN32
 
 #include "hook.h"
-#include "co/dbg.h"
+#include "co/colog.h"
 #include "scheduler.h"
 #include "io_event.h"
 #include "co/co.h"
@@ -116,14 +116,20 @@ class Hook {
 
     inline void free_by_fd(int fd){
         assert(fd >= 0 && fd < _size);
-        free(_infos[fd]);
-        _infos[fd] = nullptr;
+        if(_infos[fd]){
+            free(_infos[fd]);
+            _infos[fd] = nullptr;
+        }
         COLOG << "fd:" << fd << "free " ;
     }
 
     inline HookInfo* get_by_fd(int fd){
-        assert(fd >= 0 && fd < _size);
-        return _infos[fd];
+        assert(fd >= 0 && fd <_size);
+        // assert(fd >= 0);
+        // if(fd>=_size) return new_by_fd(fd);
+        if(_infos[fd]) return _infos[fd];
+
+        // return new_by_fd(fd);
     }
 
     inline HookInfo* new_by_fd(int fd){
@@ -133,8 +139,14 @@ class Hook {
         int recv_timeout = this->_Get_timeout(fd, 'r');
         int send_timeout = this->_Get_timeout(fd, 'w');
        
-       p->set_recv_timeout(recv_timeout?recv_timeout:1);
-       p->set_send_timeout(send_timeout?send_timeout:1);
+       p->set_recv_timeout(recv_timeout);
+       p->set_send_timeout(send_timeout);
+
+       fcntl(fd, F_SETFL, fp_fcntl(fd, F_GETFL, 0 ));
+
+       COLOG <<"fd:" << fd << "recv_timeout:" << recv_timeout
+            << "send_timeout:" << send_timeout << "is nonblock:" <<bool(p->user_flags()& O_NONBLOCK);
+       
        return p;
 
     }
@@ -144,21 +156,25 @@ class Hook {
         auto phi = get_by_fd(fd);
         assert(phi);
         COLOG << "fd:" << fd << "shutdown "<< c ;
-        if (c == 'r') {
-            phi->set_recv_timeout(0);
-            if (phi->send_timeout()==0) {
+        switch(c) {
+            case 'r':{
+                phi->set_recv_timeout(0);
+                if (phi->send_timeout()==0) {
+                    free_by_fd(fd);
+                    return nullptr;
+                }
+            }
+            case 'w': {
+                phi->set_send_timeout(0);
+                if (phi->recv_timeout()==0) {
+                    free_by_fd(fd);
+                    return nullptr;
+                }
+            }
+            default:{
                 free_by_fd(fd);
                 return nullptr;
             }
-        } else if (c == 'w') {
-            phi->set_send_timeout(0);
-            if (phi->recv_timeout()==0) {
-                free_by_fd(fd);
-                return nullptr;
-            }
-        } else {
-            free_by_fd(fd);
-            return nullptr;
         }
 
         return phi;
@@ -271,6 +287,7 @@ kevent_fp_t fp_kevent = 0;
             return -1; \
         } \
     } while (true)
+
 static const char* _fcntl_name_table[]={
     "F_DUPFD",
     "F_GETFD",
@@ -387,7 +404,7 @@ int setsockopt(int fd, int level, int option_name,
 			                 const void *option_value, socklen_t option_len)
 {
 	init_hook( setsockopt );
-
+    if (!gSched) return fp_setsockopt( fd,level,option_name,option_value,option_len );
 	// if( !co_is_enable_sys_hook() )
 	// {
 	// 	return g_sys_setsockopt_func( fd,level,option_name,option_value,option_len );
@@ -430,11 +447,8 @@ int setsockopt(int fd, int level, int option_name,
 int socket(int domain, int type, int protocol)
 {
     init_hook(socket);
+    // return fp_socket(domain,type,protocol);
     if (!gSched) return fp_socket(domain,type,protocol);
-
-    
-    // if( type & SOCK_NONBLOCK )
-    //     return fp_socket(domain,type,protocol);
 
     int fd = fp_socket(domain,type,protocol);
     COLOG << "domain:"<< domain <<" type:" << type
@@ -445,14 +459,32 @@ int socket(int domain, int type, int protocol)
 	}
 
 	auto phi = gHook().new_by_fd( fd );
-    if ( type & SOCK_NONBLOCK )
-        phi->set_user_flags(phi->user_flags()| O_NONBLOCK);
-        
-	
-	fcntl( fd, F_SETFL, fp_fcntl(fd, F_GETFL,0 ) );
+    COLOG << "fd:"<<fd<<" hook:"<< phi;
+    // fcntl(fd, F_SETFL, fp_fcntl(fd, F_GETFL, 0 ));
 
 	return fd;
 
+}
+static int _connect(sock_t fd, const void* addr, int addrlen, int ms) {
+    do {
+        int r = fp_connect(fd, (const sockaddr*)addr, (socklen_t)addrlen);
+        if (r == 0) return 0;
+
+        if (errno == EINPROGRESS) {
+            IoEvent ev(fd, EV_write);
+            if (!ev.wait(ms)) return -1;
+
+            int err, len = sizeof(err);
+            r = co::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            if (r != 0) return -1;
+            if (err == 0) return 0;
+            errno = err;
+            return -1;
+
+        } else if (errno != EINTR) {
+            return -1;
+        }
+    } while (true);
 }
 
 int connect(int fd, const struct sockaddr* addr, socklen_t addrlen) {
@@ -464,11 +496,9 @@ int connect(int fd, const struct sockaddr* addr, socklen_t addrlen) {
 
     COLOG << "fd:"<< fd <<" (" << *addr <<")"
         << " addrlen:" << addrlen ;
-    int r;
-    r = co::connect(fd, addr, addrlen, p->send_timeout());
+    int r = _connect(fd, addr, addrlen, p->send_timeout());
     if (r == -1 && errno == ETIMEDOUT) errno = EINPROGRESS; // set errno to EINPROGRESS
 
-    gHook().free_by_fd(fd);
     return r;
 }
 
@@ -482,11 +512,11 @@ int accept(int fd, struct sockaddr* addr, socklen_t* addrlen) {
     IoEvent ev(fd, EV_read);
     do {
         int conn_fd = fp_accept(fd, addr, addrlen);
-        COLOG << "conn_fd:"<< fd << " (" << *addr <<")"
-        << " addrlen:" << *addrlen ;
+        
         if (conn_fd != -1) {
-            p = gHook().new_by_fd(conn_fd);
-            fcntl(conn_fd, F_SETFL, fp_fcntl(conn_fd, F_GETFL, 0 ) );
+            COLOG << "fd:"<< fd << " accept "<<conn_fd << "(" << *addr <<")"
+                << " addrlen:" << *addrlen ;
+            gHook().new_by_fd(conn_fd);
             return conn_fd;
         }
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -503,19 +533,31 @@ int shutdown(int fd, int how) {
     
     char c = (how == SHUT_RD ? 'r' : (how == SHUT_WR ? 'w' : 'b'));
     COLOG << "fd:"<< fd << " how:"<< c;
-    auto p = gHook().on_shutdown(fd, c);
-    // if (!p->hookable()) return fp_shutdown(fd, how);
-    if(p) return fp_shutdown(fd, how);
-    return co::shutdown(fd, c);
+    /*auto p = */gHook().on_shutdown(fd, c);
+    if (c == 'r') {
+        gSched->del_event(fd, EV_read);
+        return fp_shutdown(fd, SHUT_RD);
+    } else if (c == 'w') {
+        gSched->del_event(fd, EV_write);
+        return fp_shutdown(fd, SHUT_WR);
+    } else {
+        gSched->del_event(fd);
+        return fp_shutdown(fd, SHUT_RDWR);
+
+    }
+
 }
 
 int close(int fd) {
     init_hook(close);
     if (!gSched) return fp_close(fd);
+
     COLOG << "fd:"<< fd ;
     gHook().free_by_fd(fd);
-    // if (!p->hookable()) return fp_close(fd);
-    return co::close(fd);
+    gSched->del_event(fd);
+
+    // while (fp_close(fd) != 0 && errno == EINTR);
+    return fp_close(fd);
 }
 
 // int __close(int fd) {
@@ -666,40 +708,41 @@ int poll(struct pollfd* fds, nfds_t nfds, int ms) {
         }
     } while (0);
 
-    // it's boring to hook poll when nfds > 1, just check poll every 16 ms
+    // it's boring to hook poll when nfds > 1, just check poll every 17 ms
     do {
         int r = fp_poll(fds, nfds, 0);
         if (r != 0) return r;
-        COLOG << "fds[0]:" <<fds[0] << " nfds:" << nfds << " sleep 16ms ...";
-        co::sleep(16);
-        if (ms > 0 && (ms -= 16) < 0) return 0;
+        COLOG << "fds[0]:" <<fds[0] << " nfds:" << nfds << " sleep 17ms ...";
+        usleep(17*1000);
+        if (ms > 0 && (ms -= 17) < 0) return 0;
     } while (true);
 }
 
-int __poll(struct pollfd* fds, nfds_t nfds, int ms) {
-    return poll(fds, nfds, ms);
-}
+// int __poll(struct pollfd* fds, nfds_t nfds, int ms) {
+//     return poll(fds, nfds, ms);
+// }
 
 int select(int nfds, fd_set* r, fd_set* w, fd_set* e, struct timeval* tv) {
     init_hook(select);
     if (!gSched) return fp_select(nfds, r, w, e, tv);
 
-    int ms = -1;
-    if (tv) ms = (int) (tv->tv_sec * 1000 + tv->tv_usec / 1000);
-    if (ms == 0) return fp_select(nfds, r, w, e, tv);
+    useconds_t us = -1;
+    if (tv) us = tv->tv_sec * 1000000 + tv->tv_usec ;
+    if (us <1000) return fp_select(nfds, r, w, e, tv);
 
-    if ((nfds == 0 || (!r && !w && !e)) && ms > 0) {
-        co::sleep(ms);
+    if ((nfds == 0 || (!r && !w && !e)) ) {
+        usleep(us);
         return 0;
     }
 
-    // it's boring to hook select, just check select every 16 ms
+    // it's boring to hook select, just check select every 17 ms
     struct timeval o = { 0, 0 };
     do {
         int x = fp_select(nfds, r, w, e, &o);
         if (x != 0) return x;
-        co::sleep(16);
-        if (ms > 0 && (ms -= 16) < 0) return 0;
+        COLOG << " nfds:" << nfds << " sleep 17ms ...";
+        usleep(17*1000);
+        if (us >= 1000 && (us -= 17*1000) < 0) return 0;
     } while (true);
 }
 
@@ -750,8 +793,7 @@ int accept4(int fd, struct sockaddr* addr, socklen_t* addrlen, int flags) {
     do {
         int conn_fd = fp_accept4(fd, addr, addrlen, flags);
         if (conn_fd != -1) {
-            p = gHook().new_by_fd(conn_fd);
-            fcntl(conn_fd, F_SETFL, fp_fcntl(conn_fd, F_GETFL, 0));
+            gHook().new_by_fd(conn_fd);
             return conn_fd;
         }
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -914,6 +956,7 @@ static bool _dummy = init_hooks();
 
 bool init_hooks() {
     (void) _dummy;
+    init_hook(socket);
     init_hook(connect);
     init_hook(accept);
     init_hook(close);
@@ -954,7 +997,150 @@ bool init_hooks() {
 
 #undef do_hook
 #undef init_hook
+#if 0
+using sock_t = int;
 
+int close(sock_t fd, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    gSched->del_event(fd);
+    if (ms > 0) gSched->sleep(ms);
+    int r;
+    while ((r = fp_close(fd)) != 0 && errno == EINTR);
+    return r;
+}
+
+
+int connect(sock_t fd, const void* addr, int addrlen, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    assert(gSched);
+
+    auto p = gHook().get_by_fd(fd);
+    assert (p && p->hookable()) ;
+
+    COLOG << "fd:"<< fd <<" (" << *addr <<")"
+        << " addrlen:" << addrlen ;
+    int r _connect(fd, addr, addrlen, ms);
+    if (r == -1 && errno == ETIMEDOUT) errno = EINPROGRESS; // set errno to EINPROGRESS
+
+    return r;
+}
+
+int recv(sock_t fd, void* buf, int n, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    assert(gSched);
+
+    auto p = gHook().get_by_fd(fd);
+    assert (p && p->hookable());
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<<flags;
+    IoEvent ev(fd, EV_read);
+    do_hook(fp_recv(fd, buf, len, flags), ev, ms);
+}
+
+int _Recvn(sock_t fd, void* buf, int n, int ms) {
+    char* s = (char*) buf;
+    int remain = n;
+    IoEvent ev(fd, EV_read);
+
+    do {
+        int r = (int) fp_recv(fd, s, remain, 0);
+        if (r == remain) return n;
+        if (r == 0) return 0;
+
+        if (r == -1) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                if (!ev.wait(ms)) return -1;
+            } else if (errno != EINTR) {
+                return -1;
+            }
+        } else {
+            remain -= r;
+            s += r;
+        }
+    } while (true);
+}
+
+int recvn(sock_t fd, void* buf, int n, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    char* s = (char*) buf;
+    int remain = n;
+
+    while (remain > FLG_co_max_recv_size) {
+        int r = _Recvn(fd, s, FLG_co_max_recv_size, ms);
+        if (r != FLG_co_max_recv_size) return r;
+        remain -= FLG_co_max_recv_size;
+        s += FLG_co_max_recv_size;
+    }
+
+    int r = _Recvn(fd, s, remain, ms);
+    return r != remain ? r : n;
+}
+
+int recvfrom(sock_t fd, void* buf, int n, void* addr, int* addrlen, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    init_hook(recvfrom);
+    assert (gSched);
+
+    auto p = gHook().get_by_fd(fd);
+    assert (p && p->hookable())
+    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<<flags;
+    IoEvent ev(fd, EV_read);
+    do_hook(fp_recvfrom(fd, buf, len, flags, addr, addrlen), ev, ms);
+}
+
+int _Send(sock_t fd, const void* buf, int n, int ms) {
+    const char* s = (const char*) buf;
+    int remain = n;
+    IoEvent ev(fd, EV_write);
+
+    do {
+        int r = (int) fp_send(fd, s, remain, 0);
+        if (r == remain) return n;
+
+        if (r == -1) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                if (!ev.wait(ms)) return -1;
+            } else if (errno != EINTR) {
+                return -1;
+            }
+        } else {
+            remain -= r;
+            s += r;
+        }
+    } while (true);
+}
+
+int send(sock_t fd, const void* buf, int n, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    const char* s = (const char*) buf;
+    int remain = n;
+
+    while (remain > FLG_co_max_send_size) {
+        int r = _Send(fd, s, FLG_co_max_send_size, ms);
+        if (r != FLG_co_max_send_size) return r;
+        remain -= FLG_co_max_send_size;
+        s += FLG_co_max_send_size;
+    }
+
+    int r = _Send(fd, s, remain, ms);
+    return r != remain ? r : n;
+}
+
+int sendto(sock_t fd, const void* buf, int n, const void* addr, int addrlen, int ms) {
+    CHECK(gSched) << "must be called in coroutine..";
+    IoEvent ev(fd, EV_write);
+
+    do {
+        int r = (int) fp_sendto(fd, buf, n, 0, (const sockaddr*)addr, (socklen_t)addrlen);
+        if (r != -1) return r;
+
+        if (errno == EWOULDBLOCK || errno == EAGAIN) {
+            if (!ev.wait(ms)) return -1;
+        } else if (errno != EINTR) {
+            return -1;
+        }
+    } while (true);
+}
+#endif
 } // co
 
 #endif

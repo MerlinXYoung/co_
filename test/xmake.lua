@@ -15,5 +15,6 @@ target(test[1])
     set_kind("binary")
     set_default(true)
     add_deps("libco")
+    add_defines("CODBG")
     add_files(test[2])
 end

@@ -1,5 +1,5 @@
 #include "co/all.h"
-#include "co/dbg.h"
+#include "co/colog.h"
 
 DEF_string(ip, "127.0.0.1", "ip");
 DEF_int32(port, 9988, "port");

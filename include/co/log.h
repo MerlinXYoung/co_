@@ -29,12 +29,17 @@ void push_level_log(fastream* fs, int level);
 extern __thread fastream* xxLog;
 
 enum LogLevel {
-    debug = 0,
-    info = 1,
-    warning = 2,
-    error = 3,
-    fatal = 4
+    trace =0,
+    debug = 1,
+    info = 2,
+    warning = 3,
+    error = 4,
+    fatal = 5,
 };
+inline const char* log_level_name(int lvl) {
+    static const char* _name[] = { "TRACE", "DEBUG", "INFO ", "WARN ", "ERROR", "FATAL"};
+    return _name[lvl];
+}
 
 class LevelLogSaver {
   public:
@@ -42,8 +47,8 @@ class LevelLogSaver {
         if (xxLog == 0) xxLog = new fastream(128);
         xxLog->clear();
 
-        (*xxLog) << "DIWEF"[level];
-        xxLog->resize(14); // make room for time: 1108 18:16:08
+        (*xxLog) << log_level_name(level)<<' ';
+        xxLog->resize(19); // make room for time: TRACE 1108 18:16:08
         (*xxLog) << ' ' << current_thread_id() << ' ' << file << ':' 
             << line << '(' << func << ")]" << ' ';
     }
@@ -123,6 +128,7 @@ using namespace ___;
 #define LOGGER(lvl) \
 if (FLG_min_log_level <= lvl) log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCTION__, lvl).fs()
 
+#define TLOG  LOGGER(log::xx::trace)
 #define DLOG  LOGGER(log::xx::debug)
 #define LOG   LOGGER(log::xx::info)
 #define WLOG  LOGGER(log::xx::warning)
@@ -130,6 +136,7 @@ if (FLG_min_log_level <= lvl) log::xx::LevelLogSaver(__FILE__, __LINE__, __FUNCT
 #define _FLOG log::xx::FatalLogSaver(__FILE__, __LINE__, __FUNCTION__).fs()
 #define FLOG  _FLOG << "fatal error! "
 
+#define TLOG_IF(cond) if (cond) TLOG
 #define DLOG_IF(cond) if (cond) DLOG
 #define  LOG_IF(cond) if (cond) LOG
 #define WLOG_IF(cond) if (cond) WLOG
@@ -141,11 +148,12 @@ do{\
 if (FLG_min_log_level <= lvl){ \
 if (log::xx::xxLog == nullptr) log::xx::xxLog = new fastream(128);\
 log::xx::xxLog->clear();\
-sprintf(*log::xx::xxLog, "%cmmdd hh:MM:ss %u %s:%u(%s)] " fmt "\n", "DIWEF"[lvl], current_thread_id(), __FILE__, __LINE__, __func__, __VA_ARGS__);\
+sprintf(*log::xx::xxLog, "%s mmdd hh:MM:ss %u %s:%u(%s)] " fmt "\n", log_level_name(lvl), current_thread_id(), __FILE__, __LINE__, __func__, __VA_ARGS__);\
 log::xx::push_level_log(log::xx::xxLog, lvl);\
 }\
 }while(0)
 
+#define LOG_TRACE(fmt, ...) LOG_LVL(log::xx::trace, fmt, __VA_ARGS__)
 #define LOG_DEBUG(fmt, ...) LOG_LVL(log::xx::debug, fmt, __VA_ARGS__)
 #define LOG_INFO(fmt, ...) LOG_LVL(log::xx::info, fmt, __VA_ARGS__)
 #define LOG_WARN(fmt, ...) LOG_LVL(log::xx::warning, fmt, __VA_ARGS__)
@@ -158,6 +166,7 @@ sprintf(*log::xx::xxLog, " %u %s:%u(%s)] " fmt "\n", current_thread_id(), __FILE
 log::xx::push_fatal_log(log::xx::xxLog);\
 }while(0)
 
+#define LOG_TRACE_IF(cond) if (cond) LOG_TRACE
 #define LOG_DEBUG_IF(cond) if (cond) LOG_DEBUG
 #define LOG_INFO_IF(cond) if (cond) LOG_INFO
 #define LOG_WARN_IF(cond) if (cond) LOG_WARN

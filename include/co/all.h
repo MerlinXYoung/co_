@@ -14,6 +14,7 @@
 #include "thread.h"
 #include "flag.h"
 #include "log.h"
+#include "colog.h"
 #include "unitest.h"
 
 #include "random.h"

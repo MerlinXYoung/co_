@@ -5,15 +5,7 @@
 #include "byte_order.h"
 #include "fastring.h"
 #include "log.h"
-#ifdef _WIN32
-#include <WinSock2.h>
-#include <ws2tcpip.h> // for inet_ntop...
-#include <MSWSock.h>
-#pragma comment(lib, "Ws2_32.lib")
 
-typedef SOCKET sock_t;
-
-#else
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -25,7 +17,7 @@ typedef SOCKET sock_t;
 #include <netdb.h>       // getaddrinfo, gethostby...
 
 typedef int sock_t;
-#endif
+
 
 namespace co {
 
@@ -249,19 +241,23 @@ inline sock_t tcp_socket(int af=AF_INET) {
 inline sock_t udp_socket(int af=AF_INET) {
     return ::socket(af, SOCK_DGRAM, IPPROTO_UDP);
 }
+inline int bind(sock_t fd, const void* addr, int addrlen) {
+    return ::bind(fd, (const struct sockaddr*) addr, (socklen_t) addrlen);
+}
 
-// close the fd @ms milliseconds later
-int close(sock_t fd, int ms=0);
+inline int listen(sock_t fd, int backlog) {
+    return ::listen(fd, backlog);
+}
 
-// @c:  'r' for SHUT_RD, 'w' for SHUT_WR, 'b' for SHUT_RDWR
-int shutdown(sock_t fd, char c='b');
+inline sock_t accept(sock_t fd, void* addr, int* addrlen) {
+    return ::accept(fd, (struct sockaddr*) addr, (socklen_t*)addrlen);
+}
 
-int bind(sock_t fd, const void* addr, int addrlen);
+inline int close(sock_t fd) {
+    return ::close(fd);
+}
 
-int listen(sock_t fd, int backlog);
-
-// return a non-blocking socket on Linux & Mac, an overlapped socket on windows
-sock_t accept(sock_t fd, void* addr, int* addrlen);
+int close(sock_t fd, int ms); 
 
 // connect until connection is done or timeout in @ms, or any error occured
 int connect(sock_t fd, const void* addr, int addrlen, int ms=-1);
@@ -280,15 +276,6 @@ int send(sock_t fd, const void* buf, int n, int ms=-1);
 // for udp, max(n) == 65507
 int sendto(sock_t fd, const void* buf, int n, const void* addr, int addrlen, int ms=-1);
 
-#ifdef _WIN32
-inline int getsockopt(sock_t fd, int lv, int opt, void* optval, int* optlen) {
-    return ::getsockopt(fd, lv, opt, (char*)optval, optlen);
-}
-
-inline int setsockopt(sock_t fd, int lv, int opt, const void* optval, int optlen) {
-    return ::setsockopt(fd, lv, opt, (const char*)optval, optlen);
-}
-#else
 inline int getsockopt(sock_t fd, int lv, int opt, void* optval, int* optlen) {
     return ::getsockopt(fd, lv, opt, optval, (socklen_t*)optlen);
 }
@@ -296,7 +283,7 @@ inline int getsockopt(sock_t fd, int lv, int opt, void* optval, int* optlen) {
 inline int setsockopt(sock_t fd, int lv, int opt, const void* optval, int optlen) {
     return ::setsockopt(fd, lv, opt, optval, (socklen_t)optlen);
 }
-#endif
+
 
 inline void set_reuseaddr(sock_t fd) {
     int v = 1;
@@ -329,17 +316,13 @@ inline void reset_tcp_socket(sock_t fd, int ms=0) {
     co::close(fd, ms);
 }
 
-#ifndef _WIN32
 inline void set_nonblock(sock_t fd) {
-    DLOG << "fd:" <<fd;
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 }
 
 inline void set_cloexec(sock_t fd) {
-    DLOG << "fd:" <<fd;
     fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
 }
-#endif
 
 // fill in ipv4 addr with ip & port
 inline bool init_ip_addr(struct sockaddr_in* addr, const char* ip, int port) {
@@ -371,11 +354,9 @@ inline fastring ip_str(struct sockaddr_in6* addr) {
     return fastring(s);
 }
 
-#ifdef _WIN32
-inline int error() { return WSAGetLastError(); }
-#else
+
 inline int error() { return errno; }
-#endif
+
 
 // thread-safe strerror
 const char* strerror(int err);

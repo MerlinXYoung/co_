@@ -64,7 +64,7 @@ typedef int (*gethostbyaddr_r_fp_t)(const void*, socklen_t, int, struct hostent*
 typedef int (*kevent_fp_t)(int, const struct kevent*, int, struct kevent*, int, const struct timespec*);
 #endif
 
-extern socket_fp_t fp_socket;
+// extern socket_fp_t fp_socket;
 
 extern connect_fp_t fp_connect;
 extern accept_fp_t fp_accept;
@@ -106,6 +106,9 @@ extern gethostbyaddr_r_fp_t fp_gethostbyaddr_r;
 #else
 extern kevent_fp_t fp_kevent;
 #endif
+
+
+
 
 } // "C"
 

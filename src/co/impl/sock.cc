@@ -9,81 +9,18 @@ DEF_int32(co_max_send_size, 1024 * 1024, "#1 max size for a single send");
 
 namespace co {
 
-// #ifdef SOCK_NONBLOCK
-// sock_t socket(int domain, int type, int protocol) {
-//     return ::socket(domain, type | /*SOCK_NONBLOCK |*/ SOCK_CLOEXEC, protocol);
-// }
 
-// #else
-// sock_t socket(int domain, int type, int protocol) {
-//     sock_t fd = ::socket(domain, type, protocol);
-//     if (fd != -1) {
-//         co::set_nonblock(fd);
-//         co::set_cloexec(fd);
-//     }
-//     return fd;
-// }
-// #endif
 
 int close(sock_t fd, int ms) {
     CHECK(gSched) << "must be called in coroutine..";
     gSched->del_event(fd);
     if (ms > 0) gSched->sleep(ms);
-    int r;
-    while ((r = fp_close(fd)) != 0 && errno == EINTR);
-    return r;
+    return ::close(fd);
+    // int r;
+    // while ((r = fp_close(fd)) != 0 && errno == EINTR);
+    // return r;
 }
 
-int shutdown(sock_t fd, char c) {
-    CHECK(gSched) << "must be called in coroutine..";
-    if (c == 'r') {
-        gSched->del_event(fd, EV_read);
-        return fp_shutdown(fd, SHUT_RD);
-    } else if (c == 'w') {
-        gSched->del_event(fd, EV_write);
-        return fp_shutdown(fd, SHUT_WR);
-    } else {
-        gSched->del_event(fd);
-        return fp_shutdown(fd, SHUT_RDWR);
-    }
-}
-
-int bind(sock_t fd, const void* addr, int addrlen) {
-    return ::bind(fd, (const struct sockaddr*) addr, (socklen_t) addrlen);
-}
-
-int listen(sock_t fd, int backlog) {
-    return ::listen(fd, backlog);
-}
-
-sock_t accept(sock_t fd, void* addr, int* addrlen) {
-    CHECK(gSched) << "must be called in coroutine..";
-    IoEvent ev(fd, EV_read);
-
-    do {
-      #ifdef SOCK_NONBLOCK
-        sock_t connfd = fp_accept4(fd, (sockaddr*)addr, (socklen_t*)addrlen, SOCK_CLOEXEC);
-        COLOG << "fd:" << fd << " accept >" <<connfd;
-        if (connfd != -1) {
-            fcntl(connfd, F_SETFL, fp_fcntl(connfd, F_GETFL, 0));
-            return connfd;
-        }
-      #else
-        sock_t connfd = fp_accept(fd, (sockaddr*)addr, (socklen_t*)addrlen);
-        if (connfd != -1) {
-            fcntl(connfd, F_SETFL, fp_fcntl(connfd, F_GETFL, 0));
-            co::set_cloexec(connfd);
-            return connfd;
-        }
-      #endif
-
-        if (errno == EWOULDBLOCK || errno == EAGAIN) {
-            ev.wait();
-        } else if (errno != EINTR) {
-            return -1;
-        }
-    } while (true);
-}
 
 int connect(sock_t fd, const void* addr, int addrlen, int ms) {
     CHECK(gSched) << "must be called in coroutine..";
