@@ -15,9 +15,6 @@
 #include <mutex>
 #include <cstdarg>
 
-DEF_uint32(co_hook_min_size, 1024*10 , "#0 co hook min size of file descriptor, default: 10k");
-
-#define HLOG 
 
 template<class Stream>
 inline Stream& operator<<(Stream& os, const sockaddr& addr)
@@ -42,10 +39,6 @@ class HookInfo {
     ~HookInfo() = default;
 
     DISALLOW_COPY_AND_ASSIGN(HookInfo);
-
-    // HookInfo(const HookInfo& h) {
-    //     _v = h._v;
-    // }
 
     inline bool hookable() const {
         return !(_user_flags & O_NONBLOCK);
@@ -85,37 +78,24 @@ class HookInfo {
 };
 
 class Hook {
-    HookInfo** _infos{nullptr};
-    int _size{0};
+    HookInfo* _infos[CO_MAX_FD];
     using lock_type = std::mutex;
     using lock_guard_type = std::unique_lock<lock_type>;
     lock_type _lock;
   public:
     // Hook() : _hk(co::max_sched_num()) {}
     Hook(){
-        _infos = (HookInfo**) malloc(sizeof(HookInfo*) * FLG_co_hook_min_size);
-        assert(_infos);
-        _size = FLG_co_hook_min_size;
+        bzero(_infos, sizeof(_infos));
     }
     ~Hook() = default;
 
     inline HookInfo* alloc_by_fd(int fd){
-        if(_size <= fd){
-            COLOG << "fd:" << fd << "lock ...";
-            lock_guard_type g(_lock);
-            if(_size <= fd){
-                auto size = _size*3>>1;
-                _infos = (HookInfo**) realloc(_infos, sizeof(HookInfo*) * size);
-                assert(!_infos);
-                _size = size;
-                COLOG << "fd:" << fd << "new size " << _size ;
-            }
-        }
+        assert(fd<CO_MAX_FD);
         return _infos[fd] = (HookInfo*) malloc(sizeof(HookInfo));
     }
 
     inline void free_by_fd(int fd){
-        assert(fd >= 0 && fd < _size);
+        assert(fd >= 0 && fd < CO_MAX_FD);
         if(_infos[fd]){
             free(_infos[fd]);
             _infos[fd] = nullptr;
@@ -124,12 +104,8 @@ class Hook {
     }
 
     inline HookInfo* get_by_fd(int fd){
-        assert(fd >= 0 && fd <_size);
-        // assert(fd >= 0);
-        // if(fd>=_size) return new_by_fd(fd);
+        assert(fd >= 0 && fd <CO_MAX_FD);
         if(_infos[fd]) return _infos[fd];
-
-        // return new_by_fd(fd);
     }
 
     inline HookInfo* new_by_fd(int fd){
@@ -997,150 +973,7 @@ bool init_hooks() {
 
 #undef do_hook
 #undef init_hook
-#if 0
-using sock_t = int;
 
-int close(sock_t fd, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    gSched->del_event(fd);
-    if (ms > 0) gSched->sleep(ms);
-    int r;
-    while ((r = fp_close(fd)) != 0 && errno == EINTR);
-    return r;
-}
-
-
-int connect(sock_t fd, const void* addr, int addrlen, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    assert(gSched);
-
-    auto p = gHook().get_by_fd(fd);
-    assert (p && p->hookable()) ;
-
-    COLOG << "fd:"<< fd <<" (" << *addr <<")"
-        << " addrlen:" << addrlen ;
-    int r _connect(fd, addr, addrlen, ms);
-    if (r == -1 && errno == ETIMEDOUT) errno = EINPROGRESS; // set errno to EINPROGRESS
-
-    return r;
-}
-
-int recv(sock_t fd, void* buf, int n, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    assert(gSched);
-
-    auto p = gHook().get_by_fd(fd);
-    assert (p && p->hookable());
-    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<<flags;
-    IoEvent ev(fd, EV_read);
-    do_hook(fp_recv(fd, buf, len, flags), ev, ms);
-}
-
-int _Recvn(sock_t fd, void* buf, int n, int ms) {
-    char* s = (char*) buf;
-    int remain = n;
-    IoEvent ev(fd, EV_read);
-
-    do {
-        int r = (int) fp_recv(fd, s, remain, 0);
-        if (r == remain) return n;
-        if (r == 0) return 0;
-
-        if (r == -1) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                if (!ev.wait(ms)) return -1;
-            } else if (errno != EINTR) {
-                return -1;
-            }
-        } else {
-            remain -= r;
-            s += r;
-        }
-    } while (true);
-}
-
-int recvn(sock_t fd, void* buf, int n, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    char* s = (char*) buf;
-    int remain = n;
-
-    while (remain > FLG_co_max_recv_size) {
-        int r = _Recvn(fd, s, FLG_co_max_recv_size, ms);
-        if (r != FLG_co_max_recv_size) return r;
-        remain -= FLG_co_max_recv_size;
-        s += FLG_co_max_recv_size;
-    }
-
-    int r = _Recvn(fd, s, remain, ms);
-    return r != remain ? r : n;
-}
-
-int recvfrom(sock_t fd, void* buf, int n, void* addr, int* addrlen, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    init_hook(recvfrom);
-    assert (gSched);
-
-    auto p = gHook().get_by_fd(fd);
-    assert (p && p->hookable())
-    COLOG << "fd:"<< fd << " buf:"<< buf <<" len:"<<len <<" flags:"<<flags;
-    IoEvent ev(fd, EV_read);
-    do_hook(fp_recvfrom(fd, buf, len, flags, addr, addrlen), ev, ms);
-}
-
-int _Send(sock_t fd, const void* buf, int n, int ms) {
-    const char* s = (const char*) buf;
-    int remain = n;
-    IoEvent ev(fd, EV_write);
-
-    do {
-        int r = (int) fp_send(fd, s, remain, 0);
-        if (r == remain) return n;
-
-        if (r == -1) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                if (!ev.wait(ms)) return -1;
-            } else if (errno != EINTR) {
-                return -1;
-            }
-        } else {
-            remain -= r;
-            s += r;
-        }
-    } while (true);
-}
-
-int send(sock_t fd, const void* buf, int n, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    const char* s = (const char*) buf;
-    int remain = n;
-
-    while (remain > FLG_co_max_send_size) {
-        int r = _Send(fd, s, FLG_co_max_send_size, ms);
-        if (r != FLG_co_max_send_size) return r;
-        remain -= FLG_co_max_send_size;
-        s += FLG_co_max_send_size;
-    }
-
-    int r = _Send(fd, s, remain, ms);
-    return r != remain ? r : n;
-}
-
-int sendto(sock_t fd, const void* buf, int n, const void* addr, int addrlen, int ms) {
-    CHECK(gSched) << "must be called in coroutine..";
-    IoEvent ev(fd, EV_write);
-
-    do {
-        int r = (int) fp_sendto(fd, buf, n, 0, (const sockaddr*)addr, (socklen_t)addrlen);
-        if (r != -1) return r;
-
-        if (errno == EWOULDBLOCK || errno == EAGAIN) {
-            if (!ev.wait(ms)) return -1;
-        } else if (errno != EINTR) {
-            return -1;
-        }
-    } while (true);
-}
-#endif
 } // co
 
 #endif

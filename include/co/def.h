@@ -47,6 +47,8 @@ typedef uint64_t uint64;
     Type(const Type&) = delete; \
     void operator=(const Type&) = delete
 
+#define CO_MAX_FD (1024*100)
+
 template<typename To, typename From>
 inline To force_cast(From& f) {
     return (To) f;

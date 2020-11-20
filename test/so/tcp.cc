@@ -1,5 +1,6 @@
 #include "co/all.h"
 #include "co/colog.h"
+#include <iostream>
 
 DEF_string(ip, "127.0.0.1", "ip");
 DEF_int32(port, 9988, "port");
@@ -28,7 +29,8 @@ void on_new_connection(void* p) {
             co::reset_tcp_socket(fd, 3000);
             break;
         } else {
-            COLOG << "server recv " << fastring(buf, r)<<" "<<++counter;
+            ++counter;
+            COLOG << "server recv " << fastring(buf, r)<<" "<<counter;
             COLOG << "server send pong";
             r = co::send(fd, "pong", 4);
             if (r == -1) {
@@ -114,13 +116,13 @@ int main(int argc, char** argv) {
 
     go(server_fun);
     sleep::ms(32);
-    for(size_t i=0;i<10;i++){
+    for(size_t i=0;i<1000;i++){
         go(client_fun);
     }
 
     sleep::sec(60);
-    stop();
-    cout<<counter<<endl;
+    co::stop();
+    std::cout<<counter<<std::endl;
 
     return 0;
 }

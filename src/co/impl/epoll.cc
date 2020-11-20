@@ -1,24 +1,8 @@
 #include "epoll.h"
+#include "hook.h"
 
 namespace co {
 
-#ifdef _WIN32
-Epoll::Epoll() : _signaled(0) {
-    _iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 1);
-    CHECK(_iocp != 0) << "create iocp failed..";
-}
-
-Epoll::~Epoll() {
-    this->close();
-}
-
-void Epoll::close() {
-    if (_iocp == 0) return;
-    CloseHandle(_iocp);
-    _iocp = 0;
-}
-
-#else
 void Epoll::handle_ev_pipe() {
     int dummy;
     while (true) {
@@ -53,15 +37,25 @@ Epoll::Epoll() : _signaled(0) {
 
     CHECK_NE(::pipe(_fds), -1) << "create pipe error: " << co::strerror();
     DLOG << "pipe:{" << _fds[0] <<", " << _fds[1]<<"}";
-    co::set_cloexec(_fds[0]);
-    co::set_cloexec(_fds[1]);
-    co::set_nonblock(_fds[0]);
+    // co::set_cloexec(_fds[0]);
+    // co::set_cloexec(_fds[1]);
+    // co::set_nonblock(_fds[0]);
+    fp_fcntl(_fds[0], F_SETFD, fp_fcntl(_fds[0], F_GETFD) | FD_CLOEXEC);
+    fp_fcntl(_fds[1], F_SETFD, fp_fcntl(_fds[1], F_GETFD) | FD_CLOEXEC);
+    fp_fcntl(_fds[0], F_SETFL, fp_fcntl(_fds[0], F_GETFL) | O_NONBLOCK);
+    // _ev_map = (uint64*)calloc(FLG_co_max_fd, sizeof(uint64));
+    bzero(_ev_map, sizeof(_ev_map));
     CHECK(this->add_ev_read(_fds[0], 0));
 }
 
 Epoll::~Epoll() {
     DLOG <<"";
     this->close();
+    // if(_ev_map)
+    // {
+    //     free(_ev_map);
+    //     _ev_map =nullptr;
+    // }
 }
 
 void Epoll::close() {
@@ -78,7 +72,7 @@ bool Epoll::add_ev_read(int fd, int ud) {
 
     epoll_event event;
     event.events = x ? (EPOLLIN | EPOLLOUT | EPOLLET) : (EPOLLIN | EPOLLET);
-    event.data.u64 = ((uint64)ud << 32) | x;
+    event.data.u64 = ((uint64)(ud|EV_UD_FLAG) << 32) | x;
 
     if (epoll_ctl(_efd, x ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &event) == 0) {
         x = event.data.u64;
@@ -96,7 +90,7 @@ bool Epoll::add_ev_write(int fd, int ud) {
 
     epoll_event event;
     event.events = x ? (EPOLLIN | EPOLLOUT | EPOLLET) : (EPOLLOUT | EPOLLET);
-    event.data.u64 = x | ud;
+    event.data.u64 = x | (EV_UD_FLAG | ud);
 
     if (epoll_ctl(_efd, x ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &event) == 0) {
         x = event.data.u64;
@@ -109,19 +103,21 @@ bool Epoll::add_ev_write(int fd, int ud) {
 
 void Epoll::del_ev_read(int fd) {
     DLOG << "fd:"<< fd ;
-    auto it = _ev_map.find(fd);
-    if (it == _ev_map.end() || !(it->second >> 32)) return; // not exists
+    // auto it = _ev_map.find(fd);
+    // if (it == _ev_map.end() || !(it->second >> 32)) return; // not exists
+    auto& ud = _ev_map[fd];
+    if ( !(ud>>32) ) return;
 
-    DLOG << "fd:"<< fd << " ud:"<< (uint32)it->second;
+    DLOG << "fd:"<< fd << " ud:"<< (uint32)ud;
     int r;
-    if (!(uint32)it->second) {
-        _ev_map.erase(it);
+    if (!(uint32)ud ) {
+        ud =0;
         r = epoll_ctl(_efd, EPOLL_CTL_DEL, fd, (epoll_event*)8);
     } else {
-        it->second = (uint32)it->second;
+        ud = (uint32)ud;
         epoll_event event;
         event.events = EPOLLOUT | EPOLLET;
-        event.data.u64 = it->second;
+        event.data.u64 = ud;
         r = epoll_ctl(_efd, EPOLL_CTL_MOD, fd, &event);
     }
 
@@ -129,19 +125,21 @@ void Epoll::del_ev_read(int fd) {
 }
 
 void Epoll::del_ev_write(int fd) {
-    auto it = _ev_map.find(fd);
-    if (it == _ev_map.end() || !(uint32)it->second) return; // not exists
+    // auto it = _ev_map.find(fd);
+    // if (it == _ev_map.end() || !(uint32)it->second) return; // not exists
+    auto& ud = _ev_map[fd];
+    if( !((uint32)ud)) return;
 
-    DLOG << "fd:"<< fd << " ud:"<< (it->second >> 32);
+    DLOG << "fd:"<< fd << " ud:"<< (ud>> 32);
     int r;
-    if (!(it->second >> 32)) {
-        _ev_map.erase(it);
+    if (!(ud>> 32)) {
+        ud=0;
         r = epoll_ctl(_efd, EPOLL_CTL_DEL, fd, (epoll_event*)8);
     } else {
-        it->second &= ((uint64)-1 << 32);
+        ud &= ((uint64)-1 << 32);
         epoll_event event;
         event.events = EPOLLIN | EPOLLET;
-        event.data.u64 = it->second;
+        event.data.u64 = ud;
         r = epoll_ctl(_efd, EPOLL_CTL_MOD, fd, &event);
     }
 
@@ -154,14 +152,24 @@ Epoll::Epoll() : _signaled(0) {
     CHECK_NE(_kq, -1) << "kqueue create error: " << co::strerror();
 
     CHECK_NE(::pipe(_fds), -1) << "create pipe error: " << co::strerror();
-    co::set_cloexec(_fds[0]);
-    co::set_cloexec(_fds[1]);
-    co::set_nonblock(_fds[0]);
+    // co::set_cloexec(_fds[0]);
+    // co::set_cloexec(_fds[1]);
+    // co::set_nonblock(_fds[0]);
+    fp_fcntl(_fds[0], F_SETFD, fp_fcntl(_fds[0], F_GETFD) | FD_CLOEXEC);
+    fp_fcntl(_fds[1], F_SETFD, fp_fcntl(_fds[1], F_GETFD) | FD_CLOEXEC);
+    fp_fcntl(_fds[0], F_SETFL, fp_fcntl(_fds[0], F_GETFL) | O_NONBLOCK);
+    // _ev_map = calloc(co_max_fd, sizeof(uint64));
+    bzero(_ev_map, sizeof(_ev_map));
     CHECK(this->add_event(_fds[0], EV_read, 0));
 }
 
 Epoll::~Epoll() {
     this->close();
+    // if(_ev_map)
+    // {
+    //     free(_ev_map);
+    //     _ev_map =nullptr;
+    // }
 }
 
 void Epoll::close() {
@@ -220,6 +228,6 @@ void Epoll::del_event(int fd) {
     }
 }
 #endif
-#endif // _WIN32
+
 
 } // co
