@@ -7,7 +7,7 @@ co::Mutex mtx;
 co::Pool pool;
 
 int v = 0;
-int n = 0;
+std::atomic_int32_t n{0};
 
 void f1() {
     ev.wait();
@@ -18,7 +18,7 @@ void f1() {
     }
 
     int* p = (int*) pool.pop();
-    if (!p) p = new int(atomic_inc(&n));
+    if (!p) p = new int(n++);
     pool.push(p);
 }
 
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     sleep::ms(200);
 
     CLOG << "v: " << v;
-    CLOG << "n: " << n;
+    CLOG << "n: " << n.load();
 
     return 0;
 }

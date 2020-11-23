@@ -113,19 +113,20 @@ class TaskManager {
   public:
     TaskManager() = default;
     ~TaskManager() = default;
+    using lock_guard_type = std::unique_lock<std::mutex>;
 
     void add_new_task(Closure* cb) {
-        ::MutexGuard g(_mtx);
+        lock_guard_type g(_mtx);
        _new_tasks.push_back(cb);
     }
 
     void add_ready_task(Coroutine* co) {
-        ::MutexGuard g(_mtx);
+        lock_guard_type g(_mtx);
         _ready_tasks.push_back(co);
     }
 
     void add_ready_timer_task(Coroutine* co, const timer_id_t& id) {
-        ::MutexGuard g(_mtx);
+        lock_guard_type g(_mtx);
         _ready_timer_tasks.insert(std::make_pair(co, id));
     }
 
@@ -134,14 +135,14 @@ class TaskManager {
         std::vector<Coroutine*>& ready_tasks,
         std::unordered_map<Coroutine*, timer_id_t>& ready_timer_tasks
     ) {
-        ::MutexGuard g(_mtx);
+        lock_guard_type g(_mtx);
         if (!_new_tasks.empty()) _new_tasks.swap(new_tasks);
         if (!_ready_tasks.empty()) _ready_tasks.swap(ready_tasks);
         if (!_ready_timer_tasks.empty()) _ready_timer_tasks.swap(ready_timer_tasks);
     }
  
   private:
-    ::Mutex _mtx;
+    std::mutex _mtx;
     std::vector<Closure*> _new_tasks;   
     std::vector<Coroutine*> _ready_tasks;
     std::unordered_map<Coroutine*, timer_id_t> _ready_timer_tasks;
@@ -203,7 +204,10 @@ class Scheduler {
     void loop();
 
     void loop_in_thread() {
-        Thread(&Scheduler::loop, this).detach();
+        // Thread(&Scheduler::loop, this).detach();
+        std::thread([this]{
+            this->loop();
+        }).detach();
     }
 
     void stop();
@@ -343,8 +347,8 @@ class SchedManager {
     ~SchedManager();
 
     Scheduler* next() {
-        if (_s != (uint32)-1) return _scheds[atomic_inc(&_n) & _s];
-        uint32 n = atomic_inc(&_n);
+        if (_s != (uint32)-1) return _scheds[++_n & _s];
+        uint32 n = ++_n;
         if (n <= ~_r) return _scheds[n % _scheds.size()]; // n <= (2^32 - 1 - r)
         return _scheds[now::us() % _scheds.size()];
     }
@@ -354,7 +358,7 @@ class SchedManager {
 
   private:
     std::vector<Scheduler*> _scheds;
-    uint32 _n;  // index, initialized as -1
+    std::atomic_uint32_t _n{-1};  // index, initialized as -1
     uint32 _r;  // 2^32 % sched_num
     uint32 _s;  // _r = 0, _s = sched_num-1;  _r != 0, _s = -1;
 };

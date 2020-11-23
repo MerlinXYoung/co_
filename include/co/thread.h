@@ -6,6 +6,69 @@
 #include "unix/thread.h"
 #endif
 
+#include <functional>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+
+class Monitor{
+public:
+    using lock_guard_type = std::unique_lock<std::mutex>;
+    Monitor(bool manual_reset=false, bool signaled=false)
+        : _consumer(0), _manual_reset(manual_reset), _signaled(signaled) {
+    }
+    ~Monitor()=default;
+    void wait() {
+        lock_guard_type g(_lock);
+        if (!_signaled) {
+            ++_consumer;
+            _cv.wait(g);
+            --_consumer;
+            assert(_signaled);
+        }
+
+        if (!_manual_reset && _consumer == 0) _signaled = false;
+    }
+
+    bool wait(unsigned int ms) {
+        lock_guard_type g(_lock);
+        if (!_signaled) {
+            ++_consumer;
+            auto state = _cv.wait_for(g, std::chrono::milliseconds(ms));
+            --_consumer;
+
+            if (state == std::cv_status::timeout) return false;
+            assert(state == std::cv_status::no_timeout);
+            assert(_signaled);
+        }
+
+        if (!_manual_reset && _consumer == 0) _signaled = false;
+        return true;
+    }
+
+    void signal() {
+        lock_guard_type g(_lock);
+        if (!_signaled) {
+            _signaled = true;
+            _cv.notify_one();
+        }
+    }
+
+    void reset() {
+        lock_guard_type g(_lock);
+        _signaled = false;
+    }
+private:
+    std::mutex _lock;
+    std::condition_variable _cv;
+    int _consumer;
+    const bool _manual_reset;
+    bool _signaled;
+};
+
+using SyncEvent = Monitor;
+
 class TaskSched {
   public:
     typedef std::function<void()> F;

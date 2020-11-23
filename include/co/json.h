@@ -374,7 +374,8 @@ class Value {
 
   private:
     void _Ref() const {
-        atomic_inc(&_mem->refn);
+        // atomic_inc(&_mem->refn);
+        ++_mem->refn;
     }
 
     void _UnRef();
@@ -443,7 +444,7 @@ class Value {
   private:
     struct _Mem {
         uint32 type;
-        uint32 refn;
+        std::atomic_uint32_t refn;
         union {
             bool b;
             int64 i;

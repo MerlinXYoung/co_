@@ -1,7 +1,9 @@
 #include "epoll.h"
 #include "hook.h"
-
+#include <thread>
 namespace co {
+uint64 Epoll::_ev_map[CO_MAX_FD];
+std::once_flag Epoll::_ev_map_flag;
 
 void Epoll::handle_ev_pipe() {
     int dummy;
@@ -30,32 +32,30 @@ inline void closesocket(sock_t& fd) {
 
 #ifdef __linux__
 Epoll::Epoll() : _signaled(0) {
-    _efd = epoll_create(1024);
+    _efd = epoll_create1(EPOLL_CLOEXEC);
     DLOG << "efd: " << _efd;
     CHECK_NE(_efd, -1) << "epoll create error: " << co::strerror();
-    co::set_cloexec(_efd);
+    // co::set_cloexec(_efd);
 
-    CHECK_NE(::pipe(_fds), -1) << "create pipe error: " << co::strerror();
+    CHECK_NE(::pipe2(_fds, O_CLOEXEC), -1) << "create pipe error: " << co::strerror();
     DLOG << "pipe:{" << _fds[0] <<", " << _fds[1]<<"}";
     // co::set_cloexec(_fds[0]);
     // co::set_cloexec(_fds[1]);
     // co::set_nonblock(_fds[0]);
-    fp_fcntl(_fds[0], F_SETFD, fp_fcntl(_fds[0], F_GETFD) | FD_CLOEXEC);
-    fp_fcntl(_fds[1], F_SETFD, fp_fcntl(_fds[1], F_GETFD) | FD_CLOEXEC);
+    // fp_fcntl(_fds[0], F_SETFD, fp_fcntl(_fds[0], F_GETFD) | FD_CLOEXEC);
+    // fp_fcntl(_fds[1], F_SETFD, fp_fcntl(_fds[1], F_GETFD) | FD_CLOEXEC);
     fp_fcntl(_fds[0], F_SETFL, fp_fcntl(_fds[0], F_GETFL) | O_NONBLOCK);
     // _ev_map = (uint64*)calloc(FLG_co_max_fd, sizeof(uint64));
-    bzero(_ev_map, sizeof(_ev_map));
+    std::call_once(_ev_map_flag, []{
+        bzero(_ev_map, sizeof(_ev_map));
+    });
+    
     CHECK(this->add_ev_read(_fds[0], 0));
 }
 
 Epoll::~Epoll() {
     DLOG <<"";
     this->close();
-    // if(_ev_map)
-    // {
-    //     free(_ev_map);
-    //     _ev_map =nullptr;
-    // }
 }
 
 void Epoll::close() {
@@ -72,7 +72,7 @@ bool Epoll::add_ev_read(int fd, int ud) {
 
     epoll_event event;
     event.events = x ? (EPOLLIN | EPOLLOUT | EPOLLET) : (EPOLLIN | EPOLLET);
-    event.data.u64 = ((uint64)(ud|EV_UD_FLAG) << 32) | x;
+    event.data.u64 = ((uint64)ud << 32) | x;
 
     if (epoll_ctl(_efd, x ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &event) == 0) {
         x = event.data.u64;
@@ -90,7 +90,7 @@ bool Epoll::add_ev_write(int fd, int ud) {
 
     epoll_event event;
     event.events = x ? (EPOLLIN | EPOLLOUT | EPOLLET) : (EPOLLOUT | EPOLLET);
-    event.data.u64 = x | (EV_UD_FLAG | ud);
+    event.data.u64 = x | ud;
 
     if (epoll_ctl(_efd, x ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &event) == 0) {
         x = event.data.u64;
@@ -103,10 +103,8 @@ bool Epoll::add_ev_write(int fd, int ud) {
 
 void Epoll::del_ev_read(int fd) {
     DLOG << "fd:"<< fd ;
-    // auto it = _ev_map.find(fd);
-    // if (it == _ev_map.end() || !(it->second >> 32)) return; // not exists
     auto& ud = _ev_map[fd];
-    if ( !(ud>>32) ) return;
+    if ( !(ud>>32) ) return; // not exists
 
     DLOG << "fd:"<< fd << " ud:"<< (uint32)ud;
     int r;

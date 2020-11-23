@@ -72,7 +72,8 @@ Value& Value::operator[](Key key) const {
 }
 
 void Value::_UnRef() {
-    if (atomic_dec(&_mem->refn) == 0) {
+    // if (atomic_dec(&_mem->refn) == 0) {
+    if( --_mem->refn == 0){
         if (_mem->type & kObject) {
             Array& a = _Array();
             for (uint32 i = 0; i < a.size(); i += 2) {

@@ -14,6 +14,9 @@
 #include <sys/event.h>
 #endif
 
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 
 
@@ -23,10 +26,7 @@ enum {
     EV_read = 1,
     EV_write =2,
 };
-// #define CO_EV_UD_FLAG (0x1<<31)
-static constexpr uint32 EV_UD_FLAG = 0x1<<31; 
-static constexpr uint64 EV_UD_FLAG_BOTH = (uint64)EV_UD_FLAG<<32|EV_UD_FLAG;//0x8000000080000000;
-static_assert(EV_UD_FLAG_BOTH == 0x8000000080000000);
+
 #ifdef __linux__
 
 class Epoll {
@@ -73,14 +73,17 @@ class Epoll {
     //   lower  32 bits: id of coroutine waiting for EV_write
     static uint64 ud(const epoll_event& ev) {
         if (ev.events & EPOLLIN) {
-            return (ev.events & EPOLLOUT) ? ev.data.u64 & ~EV_UD_FLAG_BOTH : (ev.data.u64 >> 32) & ~EV_UD_FLAG;
+            return (ev.events & EPOLLOUT) ? ev.data.u64 : ev.data.u64 >> 32;
         } else {
-            return (ev.events & EPOLLOUT) ? ((ev.data.u64 & ~EV_UD_FLAG) << 32) : ev.data.u64 & ~EV_UD_FLAG_BOTH ;
+            return (ev.events & EPOLLOUT) ? (ev.data.u64  << 32) : ev.data.u64  ;
         }
     }
 
     void signal(char c = 'x') {
-        if (atomic_compare_swap(&_signaled, 0, 1) == 0) {
+        // if (atomic_compare_swap(&_signaled, 0, 1) == 0) {
+        int expected = 0;
+        if( _signaled.compare_exchange_strong(expected, 1)){
+
             int r = (int) fp_write(_fds[1], &c, 1);
             ELOG_IF(r != 1) << "pipe write error..";
         }
@@ -97,10 +100,12 @@ class Epoll {
   private:
     int _efd;
     int _fds[2]; // pipe fd
-    int _signaled;
+    std::stomic_int _signaled;
     epoll_event _ev[1024];
     // std::unordered_map<int, uint64> _ev_map;
-    uint64 _ev_map[CO_MAX_FD];
+    static uint64 _ev_map[CO_MAX_FD];
+    static std::once_flag _ev_map_flag;
+    
 };
 
 #else // kqueue

@@ -12,6 +12,8 @@ typedef uint16_t uint16;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 
+
+
 #ifdef _MSC_VER
 #define __thread __declspec(thread)
 #else

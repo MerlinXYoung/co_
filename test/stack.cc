@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
     if (FLG_m) {
         c();
     } else if (FLG_t) {
-        Thread(c).detach();
+        std::thread(c).detach();
     } else {
         go(c);
     }

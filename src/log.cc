@@ -142,7 +142,7 @@ class LevelLogger {
     void thread_fun();
 
   private:
-    Mutex _log_mutex;
+    std::mutex _log_mutex;
     SyncEvent _log_event;
     std::unique_ptr<Thread> _log_thread;
     std::unique_ptr<fastream> _fs;
@@ -177,7 +177,9 @@ void LevelLogger::init() {
     if (_config->max_log_file_size <= 0) _config->max_log_file_size = 256 << 20;
     if (_config->max_log_buffer_size < (1 << 20)) _config->max_log_buffer_size = (1 << 20);
 
-    _log_thread.reset(new Thread(&LevelLogger::thread_fun, this));
+    _log_thread.reset(new thread([this] {
+        this->thread_run();
+    });
 }
 
 void LevelLogger::stop() {
